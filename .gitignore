@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local application and engine data
+.data/
+.sag/
+.sag_*/
+*.db
+*.sqlite3
+data/
+uploads/
+
+# Node / Next
+node_modules/
+.next/
+.next-dev/
+out/
+.turbo/
+npm-debug.log*
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# skill installer output (npx skills add)
+.agents/
