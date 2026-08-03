@@ -150,7 +150,7 @@ def test_deepseek_v4_disables_thinking_for_every_agent_tool_turn(tool_choice, ba
         assert request["tool_choice"] == tool_choice
 
 
-def test_deepseek_v4_plain_completion_keeps_provider_default_thinking():
+def test_deepseek_v4_plain_completion_disables_thinking():
     configured = Settings(
         _env_file=None,
         llm_provider="openai",
@@ -164,7 +164,7 @@ def test_deepseek_v4_plain_completion_keeps_provider_default_thinking():
         {"model": configured.routed_llm_model, "messages": []},
     )
 
-    assert "extra_body" not in request
+    assert request["extra_body"]["thinking"] == {"type": "disabled"}
 
 
 def test_deepseek_v4_tool_policy_preserves_other_extra_body_fields():
@@ -693,6 +693,70 @@ async def test_zleap_sag_extract_compat_repairs_missing_is_valid():
     item = result["data"]["items"][0]
     assert item["is_valid"] is True
     assert item["children"][0]["is_valid"] is True
+
+
+@pytest.mark.asyncio
+async def test_zleap_sag_extract_compat_falls_back_to_json_object_when_json_schema_is_unavailable():
+    from zleap.sag.core.ai.base import BaseLLMClient
+    from zleap.sag.core.ai.models import LLMMessage, LLMResponse, LLMRole
+    from zleap.sag.modules.extract.processor import EventProcessor
+
+    from sag_api.sag.compat import install_zleap_sag_extract_compat
+
+    class JsonObjectOnlyClient(BaseLLMClient):
+        def __init__(self):
+            self.config = SimpleNamespace(
+                model="moonshotai/kimi-k3",
+                base_url="https://api.example.test/v1",
+            )
+            self.response_formats = []
+
+        async def chat(self, _messages, **kwargs):
+            response_format = kwargs.get("response_format")
+            self.response_formats.append(response_format)
+            if response_format and response_format.get("type") == "json_schema":
+                raise RuntimeError("This response_format type is unavailable now")
+            assert response_format == {"type": "json_object"}
+            return LLMResponse(
+                content='{"type":"response","data":{"items":[],"meta":{"reason":"ok"}}}',
+                model="moonshotai/kimi-k3",
+            )
+
+        async def chat_stream(self, *_args, **_kwargs):
+            if False:
+                yield ""
+
+    install_zleap_sag_extract_compat()
+    schema = {
+        "type": "object",
+        "required": ["type", "data"],
+        "properties": {
+            "type": {"const": "response"},
+            "data": {
+                "type": "object",
+                "required": ["items", "meta"],
+                "properties": {
+                    "items": {"type": "array"},
+                    "meta": {
+                        "type": "object",
+                        "required": ["reason"],
+                        "properties": {"reason": {"type": "string"}},
+                    },
+                },
+            },
+        },
+    }
+    client = JsonObjectOnlyClient()
+    fake_processor = SimpleNamespace(llm_client=client)
+
+    result = await EventProcessor._call_llm_with_retry(
+        fake_processor,
+        [LLMMessage(role=LLMRole.USER, content="extract")],
+        schema,
+    )
+
+    assert result["data"]["meta"]["reason"] == "ok"
+    assert [item["type"] for item in client.response_formats] == ["json_schema", "json_object"]
 
 
 def test_agent_name_is_injected_into_prompt():
