@@ -17,12 +17,12 @@
 | Task                                 | Requirement                                                               |
 | ------------------------------------ | ------------------------------------------------------------------------- |
 | Install and run the CLI              | Node.js **≥ 20.19**                                                       |
-| Sign in and search via the HTTP API  | A reachable SAG origin (e.g. `http://localhost:8000`) plus a SAG JWT      |
+| Sign in and search via the HTTP API  | A reachable SAG origin (e.g. `http://localhost:8000`)                      |
 | Use the local Docker token-less path | Docker CLI, with a SAG API container running `sag_api.mcp.server` locally |
 | Wire into Codex                      | Codex CLI (≥ 0.145) installed                                             |
 | Wire into Claude Code                | Claude Code (≥ 2.1) installed                                             |
 
-**Where to get the JWT**: sign in to SAG Web → **Settings → Integrations** and copy the JWT. The CLI hides the input and prefers the OS credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service). When that is unavailable the token stays only in the current process; use the `SAG_TOKEN` environment variable in automation.
+**How to sign in**: run `sag auth login --name "Your name"`, or omit `--name` and enter the name in the terminal. The CLI calls SAG's existing login API and prefers the OS credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service). You can also use the `SAG_TOKEN` environment variable in automation.
 
 ## Install
 
@@ -71,7 +71,7 @@ Undo an integration:
 sag agent disconnect codex
 ```
 
-### Path B: HTTP API + JWT (across machines, or no Docker)
+### Path B: HTTP API direct sign-in (across machines, or no Docker)
 
 Authenticate and search against SAG's HTTP API directly.
 
@@ -80,8 +80,8 @@ Authenticate and search against SAG's HTTP API directly.
 sag profile add local http://localhost:8000
 sag profile use local
 
-# 2. Sign in (prompts for the JWT)
-sag auth login
+# 2. Sign in through SAG's existing login API
+sag auth login --name "Your name"
 sag auth status
 
 # 3. Health check and browse
@@ -105,6 +105,10 @@ sag doctor
 sag source list | get | status
 sag document list | get | status
 sag search <query>
+sag outline <document-id>
+sag grep <pattern>
+sag read <document-id>
+sag get-entity <name>
 sag mcp test
 sag agent list
 sag agent connect <codex | claude-code>

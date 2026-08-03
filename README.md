@@ -272,12 +272,12 @@ sag agent connect claude-code    # or mount into Claude Code
 sag agent status                 # see what's wired
 ```
 
-For a remote SAG instance (no local Docker), grab a JWT from **Settings → Integrations** and log in first:
+For a remote SAG instance (no local Docker), sign in from the terminal first:
 
 ```bash
 sag profile add prod https://sag.example.com
 sag profile use prod
-sag auth login                   # prompts for JWT (hidden input)
+sag auth login --name "Your name" # signs in to SAG directly
 sag agent connect claude-code
 ```
 

@@ -17,12 +17,12 @@
 | 你想做的事                  | 需要准备                                                    |
 | --------------------------- | ----------------------------------------------------------- |
 | 安装并运行 CLI              | Node.js **≥ 20.19**                                         |
-| 用 HTTP API 登录、搜索      | 一个可访问的 SAG Origin（如 `http://localhost:8000`）+ JWT  |
+| 用 HTTP API 登录、搜索      | 一个可访问的 SAG Origin（如 `http://localhost:8000`）       |
 | 用本机 Docker 免 Token 路径 | Docker CLI，且本机运行着含 `sag_api.mcp.server` 的 SAG 容器 |
 | 接入 Codex                  | 已安装 Codex CLI（≥ 0.145）                                 |
 | 接入 Claude Code            | 已安装 Claude Code（≥ 2.1）                                 |
 
-**JWT 从哪拿**：登录 SAG Web → **Settings → Integrations**，复制其中的 JWT。CLI 会隐藏输入并优先保存到系统凭据存储（macOS Keychain、Windows Credential Manager、Linux Secret Service）；不可用时只保留在当前进程，自动化环境请改用 `SAG_TOKEN` 环境变量。
+**登录方式**：执行 `sag auth login --name "你的名字"`，或省略 `--name` 后在终端输入名字。CLI 调用 SAG 现有登录接口，并优先把凭据保存到系统凭据存储（macOS Keychain、Windows Credential Manager、Linux Secret Service）。自动化环境也可以使用 `SAG_TOKEN` 环境变量。
 
 ## 安装
 
@@ -71,7 +71,7 @@ sag agent connect codex --dry-run
 sag agent disconnect codex
 ```
 
-### 路径 B：HTTP API + JWT（跨机器、或本机没有 Docker）
+### 路径 B：HTTP API 直连登录（跨机器、或本机没有 Docker）
 
 用 SAG 的 HTTP API 做认证、查询、检索。
 
@@ -80,8 +80,8 @@ sag agent disconnect codex
 sag profile add local http://localhost:8000
 sag profile use local
 
-# 2. 登录（会提示输入 JWT）
-sag auth login
+# 2. 登录（直接调用 SAG 登录接口）
+sag auth login --name "你的名字"
 sag auth status
 
 # 3. 体检 + 看信源
@@ -105,6 +105,10 @@ sag doctor
 sag source list | get | status
 sag document list | get | status
 sag search <query>
+sag outline <document-id>
+sag grep <pattern>
+sag read <document-id>
+sag get-entity <name>
 sag mcp test
 sag agent list
 sag agent connect <codex | claude-code>
