@@ -197,6 +197,12 @@ On first launch:
 
 The UI and services still start without model credentials. Embeddings are required for indexing/vector retrieval; the LLM is required for event extraction, query understanding, and generated answers.
 
+#### Model settings precedence
+
+`SAG_LLM_*` values in Docker Compose or `.env` provide the initial model configuration. After an administrator saves model settings in the web UI, the persisted Settings value is used for subsequent extraction and generation jobs without a restart.
+
+To make the deployment configuration mandatory, set `SAG_LOCK_LLM_CONFIG=true`. SAG then shows the generation fields as locked in Settings and continues to use the `SAG_LLM_*` values. Change Docker Compose or `.env` and restart the API container to update a locked configuration. API keys remain deployment-managed and are never returned by the Settings API.
+
 ### Import knowledge
 
 Create a source and add Markdown, text, PDF, Office, or other supported documents. SAG normalizes documents to Markdown, then runs chunking, embedding, event extraction, and entity extraction in the background.

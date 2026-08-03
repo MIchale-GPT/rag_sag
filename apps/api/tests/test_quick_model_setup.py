@@ -100,7 +100,7 @@ async def test_302_quick_model_setup(monkeypatch: pytest.MonkeyPatch):
 
                 body = response.json()
                 config = body["config"]
-                assert config == {
+                expected_config = {
                     "llm_provider": "openai",
                     "llm_base_url": "https://api.302ai.cn/v1",
                     "llm_model": "qwen3.6-flash",
@@ -126,6 +126,9 @@ async def test_302_quick_model_setup(monkeypatch: pytest.MonkeyPatch):
                     "search_top_k": 8,
                     "sag_language": "zh",
                 }
+                assert config.items() >= expected_config.items()
+                assert config["sources"]["llm_model"] == "database"
+                assert config["locked_fields"] == []
                 assert body["capabilities"]["llm_configured"] is True
                 assert body["capabilities"]["llm_provider"] == "openai"
                 assert body["capabilities"]["search_strategy"] == "vector"

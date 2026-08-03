@@ -174,6 +174,8 @@ export interface ModelConfig {
   search_strategy: SearchStrategy;
   search_top_k: number;
   sag_language: "zh" | "en";
+  sources: Partial<Record<Exclude<keyof ModelConfig, "sources" | "locked_fields">, "default" | "database" | "environment_policy">>;
+  locked_fields: string[];
 }
 
 export type ModelConfigPatch = Partial<{

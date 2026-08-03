@@ -400,6 +400,8 @@
     "mineruFailed": "MinerU 配置失败",
     "loadErrorTitle": "加载失败",
     "retry": "重试",
+    "deploymentLockTitle": "生成模型配置由部署环境管理",
+    "deploymentLockDescription": "此部署通过 SAG_LOCK_LLM_CONFIG 锁定了 LLM 配置。请修改 Docker Compose 或 .env 后重启 SAG。",
     "generationTitle": "生成模型",
     "generationLoading": "正在加载模型连接。",
     "embeddingTitle": "向量模型",
