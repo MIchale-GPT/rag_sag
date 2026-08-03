@@ -266,12 +266,12 @@ sag agent connect claude-code    # 或挂载进 Claude Code
 sag agent status                 # 查看当前接入状态
 ```
 
-接入远程 SAG 实例（本机没有 Docker）时，从 **设置 → 集成** 复制 JWT 并先登录：
+接入远程 SAG 实例（本机没有 Docker）时，先在终端登录：
 
 ```bash
 sag profile add prod https://sag.example.com
 sag profile use prod
-sag auth login                   # 隐藏输入 JWT
+sag auth login --name "你的名字" # 直接登录 SAG
 sag agent connect claude-code
 ```
 
