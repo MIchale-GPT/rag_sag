@@ -759,6 +759,32 @@ async def test_zleap_sag_extract_compat_falls_back_to_json_object_when_json_sche
     assert [item["type"] for item in client.response_formats] == ["json_schema", "json_object"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["openai/deepseek-v4-flash", "openai/deepseek-v3"])
+async def test_zleap_sag_extract_compat_uses_json_object_directly_for_deepseek(model):
+    from zleap.sag.modules.extract.processor import EventProcessor
+
+    from sag_api.sag.compat import install_zleap_sag_extract_compat
+
+    class DeepSeekClient:
+        def __init__(self):
+            self.config = SimpleNamespace(model=model)
+            self.calls = []
+
+        async def chat_with_schema(self, _messages, response_schema, **kwargs):
+            self.calls.append((response_schema, kwargs.get("response_format")))
+            return {"type": "response", "data": {"items": [], "meta": {"reason": "ok"}}}
+
+    install_zleap_sag_extract_compat()
+    schema = {"type": "object", "properties": {"type": {"const": "response"}}}
+    client = DeepSeekClient()
+
+    result = await EventProcessor._call_llm_with_retry(SimpleNamespace(llm_client=client), [], schema)
+
+    assert result["data"]["meta"]["reason"] == "ok"
+    assert client.calls == [(None, {"type": "json_object"})]
+
+
 def test_agent_name_is_injected_into_prompt():
     messages = build_agent_messages(
         "小跃",
