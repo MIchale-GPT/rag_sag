@@ -77,6 +77,28 @@ def test_default_model_output_limit_is_20000(monkeypatch):
     assert Settings(_env_file=None).llm_max_tokens == 20_000
 
 
+def test_database_model_config_overrides_environment_default():
+    from sag_api.services.settings_service import apply_overrides
+
+    configured = Settings(_env_file=None, llm_model="environment-model")
+    apply_overrides(configured, {"llm_model": "database-model"})
+
+    assert configured.llm_model == "database-model"
+
+
+def test_explicit_llm_lock_preserves_environment_values():
+    from sag_api.services.settings_service import apply_overrides
+
+    configured = Settings(
+        _env_file=None,
+        llm_model="environment-model",
+        lock_llm_config=True,
+    )
+    apply_overrides(configured, {"llm_model": "database-model"})
+
+    assert configured.llm_model == "environment-model"
+
+
 @pytest.mark.asyncio
 async def test_legacy_atomic_db_strategy_is_migrated():
     from sqlalchemy import delete, select
@@ -185,6 +207,8 @@ async def test_model_config_crud_masking_and_test(monkeypatch: pytest.MonkeyPatc
                 assert body["llm_timeout_ms"] == 60_000
                 assert body["llm_max_retries"] == 2
                 assert "search_top_k" in body and "sag_language" in body
+                assert body["sources"]["llm_model"] in {"default", "database", "environment_policy"}
+                assert body["locked_fields"] == []
 
                 providers = (await c.get("/api/v1/system/model-providers", headers=A)).json()
                 assert [provider["id"] for provider in providers] == [
@@ -253,6 +277,8 @@ async def test_model_config_crud_masking_and_test(monkeypatch: pytest.MonkeyPatc
                 assert r.status_code == 200, r.text
                 assert r.json()["config"]["llm_model"] == "test-model-x"
                 assert r.json()["config"]["llm_provider"] == "anthropic"
+                assert r.json()["config"]["sources"]["llm_model"] == "database"
+                assert "llm_api_key" not in r.json()["config"]["sources"]
                 assert r.json()["capabilities"]["llm_provider"] == "anthropic"
                 assert r.json()["capabilities"]["llm_model"] == "test-model-x"
                 assert settings.llm_model == "test-model-x"  # 单例即时生效

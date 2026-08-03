@@ -400,6 +400,8 @@
     "mineruFailed": "Failed to configure MinerU",
     "loadErrorTitle": "Failed to load",
     "retry": "Retry",
+    "deploymentLockTitle": "Generation settings are managed by deployment",
+    "deploymentLockDescription": "This deployment locks LLM settings through SAG_LOCK_LLM_CONFIG. Update Docker Compose or .env and restart SAG to change them.",
     "generationTitle": "Generation model",
     "generationLoading": "Loading the model connection.",
     "embeddingTitle": "Embedding model",

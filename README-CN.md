@@ -197,6 +197,12 @@ docker compose up -d --build
 
 没有模型密钥时，界面和服务仍可启动。Embedding 用于索引与向量检索；LLM 用于事件抽取、查询理解和生成回答。
 
+#### 模型配置优先级
+
+Docker Compose 或 `.env` 中的 `SAG_LLM_*` 用于提供首次启动时的模型默认值。管理员在 Web 设置页保存模型配置后，后续抽取和生成任务会直接使用已持久化的设置，无需重启服务。
+
+如需由部署环境强制统一配置，请设置 `SAG_LOCK_LLM_CONFIG=true`。SAG 会在设置页明确显示生成模型字段已锁定，并持续使用 `SAG_LLM_*` 的值。此时请修改 Docker Compose 或 `.env`，再重启 API 容器使改动生效。API Key 始终由部署环境管理，Settings API 不会返回密钥明文。
+
 ### 导入知识
 
 创建信源后，可以添加 Markdown、文本、PDF、Office 等支持的文档。SAG 会先将文档规范化为 Markdown，再在后台完成分块、向量化、事件抽取和实体抽取。

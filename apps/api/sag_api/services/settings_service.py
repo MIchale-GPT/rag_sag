@@ -56,6 +56,20 @@ _FIELDS = frozenset(
 )
 _SECRET_FIELDS = frozenset({"llm_api_key", "embedding_api_key", "mineru_api_key"})
 _NULLABLE_FIELDS = frozenset({"llm_base_url", "embedding_base_url", "embedding_dimensions", "mineru_base_url"})
+_LOCKABLE_LLM_FIELDS = frozenset(
+    {
+        "llm_provider",
+        "llm_base_url",
+        "llm_api_key",
+        "llm_model",
+        "llm_temperature",
+        "llm_max_tokens",
+        "llm_context_window",
+        "llm_timeout_ms",
+        "llm_max_retries",
+    }
+)
+_MODEL_CONFIG_SOURCES = {field: "default" for field in _FIELDS - _SECRET_FIELDS}
 
 _OPENAI_COMPATIBLE = get_model_provider("openai")
 
@@ -128,10 +142,18 @@ async def model_setup_status(session: AsyncSession) -> dict[str, bool]:
 
 
 def apply_overrides(settings: Settings, overrides: dict) -> None:
-    """把存储的覆盖值就地写回 settings 单例（请求 schema 已保证类型合法）。"""
-    for key, value in _normalize_overrides(overrides).items():
-        if key in _FIELDS:
+    """把持久化配置写回 settings；部署锁定时保留 LLM 环境值。"""
+    normalized = _normalize_overrides(overrides)
+    locked_fields = _LOCKABLE_LLM_FIELDS if settings.lock_llm_config else frozenset()
+    for key, value in normalized.items():
+        if key in _FIELDS and key not in locked_fields:
             setattr(settings, key, value)
+    if settings is _settings:
+        for key in _MODEL_CONFIG_SOURCES:
+            if key in locked_fields:
+                _MODEL_CONFIG_SOURCES[key] = "environment_policy"
+            elif key in normalized:
+                _MODEL_CONFIG_SOURCES[key] = "database"
 
 
 async def apply_startup_overrides(session_factory: async_sessionmaker) -> None:
@@ -186,6 +208,8 @@ def effective_model_config() -> dict:
         "search_strategy": _settings.search_strategy,
         "search_top_k": _settings.search_top_k,
         "sag_language": _settings.sag_language,
+        "sources": dict(_MODEL_CONFIG_SOURCES),
+        "locked_fields": sorted(_LOCKABLE_LLM_FIELDS) if _settings.lock_llm_config else [],
     }
 
 
@@ -225,6 +249,8 @@ async def save_model_config(session: AsyncSession, patch: dict) -> dict:
 
     for key, value in patch.items():
         if key not in _FIELDS:
+            continue
+        if _settings.lock_llm_config and key in _LOCKABLE_LLM_FIELDS:
             continue
         if key in _SECRET_FIELDS:
             if value:  # 仅非空才更新；空/None 保留原值

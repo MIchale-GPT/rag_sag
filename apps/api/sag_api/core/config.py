@@ -112,6 +112,8 @@ class Settings(BaseSettings):
     llm_context_window: int = _DEFAULT_LLM_PROVIDER.default_context_window
     llm_timeout_ms: int = Field(default=60_000, ge=1_000, le=600_000)
     llm_max_retries: int = Field(default=2, ge=0, le=10)
+    # 部署方可显式锁定 LLM 接入配置；普通 SAG_LLM_* 仅作为首次启动默认值。
+    lock_llm_config: bool = False
     # 透传给 chat/completions 的额外请求体（JSON），如 {"enable_thinking": false}；
     # 未配置时对 qwen 系模型通过 LiteLLM reasoning_effort=none 统一关闭思考。
     llm_extra_body: dict | None = None

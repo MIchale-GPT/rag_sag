@@ -22,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { api, ApiError } from "@/lib/api";
+import { isLlmConfigLocked } from "@/lib/model-config-lock";
 import type {
   ModelConfig,
   ModelConfigPatch,
@@ -250,6 +251,7 @@ export function ModelConfigForm() {
   }
 
   const providerSpec = providers.find((provider) => provider.id === llmProvider)!;
+  const llmLocked = isLlmConfigLocked(cfg);
 
   const keyPlaceholder = (isSet: boolean) => (isSet ? t("keyConfigured") : "sk-…");
   const generationKeyPlaceholder =
@@ -262,12 +264,18 @@ export function ModelConfigForm() {
 
   return (
     <div className="flex flex-col gap-6">
+      {llmLocked && (
+        <Alert>
+          <AlertTitle>{t("deploymentLockTitle")}</AlertTitle>
+          <AlertDescription>{t("deploymentLockDescription")}</AlertDescription>
+        </Alert>
+      )}
       <SettingsSection title={t("generationTitle")} description={t("generationDescription")}>
         <SettingsRow title={t("connectionTitle")} description={t("connectionDescription")}>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field>
               <FieldLabel htmlFor="llm-provider">{t("provider")}</FieldLabel>
-              <Select value={llmProvider} onValueChange={changeProvider}>
+              <Select value={llmProvider} onValueChange={changeProvider} disabled={llmLocked}>
                 <SelectTrigger id="llm-provider">
                   <SelectValue />
                 </SelectTrigger>
@@ -286,6 +294,7 @@ export function ModelConfigForm() {
               <Input
                 id="llm-url"
                 value={llmBaseUrl}
+                disabled={llmLocked}
                 onChange={(event) => setLlmBaseUrl(event.target.value)}
                 placeholder={providerSpec.default_base_url ?? t("officialEndpoint")}
               />
@@ -298,6 +307,7 @@ export function ModelConfigForm() {
                 type="password"
                 autoComplete="off"
                 value={llmKey}
+                disabled={llmLocked}
                 onChange={(event) => setLlmKey(event.target.value)}
                 placeholder={generationKeyPlaceholder}
               />
@@ -317,6 +327,7 @@ export function ModelConfigForm() {
               <Input
                 id="llm-model"
                 value={llmModel}
+                disabled={llmLocked}
                 onChange={(event) => setLlmModel(event.target.value)}
                 placeholder={providerSpec.default_model}
               />
@@ -329,6 +340,7 @@ export function ModelConfigForm() {
                 min={1024}
                 max={2000000}
                 value={ctxWindow}
+                disabled={llmLocked}
                 onChange={(event) =>
                   setCtxWindow(Math.max(1024, Number(event.target.value) || 1024))
                 }
@@ -343,6 +355,7 @@ export function ModelConfigForm() {
                 min={1}
                 max={32768}
                 value={maxTokens}
+                disabled={llmLocked}
                 onChange={(event) =>
                   setMaxTokens(Math.max(1, Number(event.target.value) || 1))
                 }
@@ -368,7 +381,7 @@ export function ModelConfigForm() {
                   min={0}
                   max={2}
                   step={0.1}
-                  disabled={!providerSpec.temperature_configurable}
+                  disabled={llmLocked || !providerSpec.temperature_configurable}
                   onValueChange={([value]) => setTemperature(value)}
                 />
               </div>
@@ -389,6 +402,7 @@ export function ModelConfigForm() {
                 max={600000}
                 step={1000}
                 value={timeoutMs}
+                disabled={llmLocked}
                 onChange={(event) =>
                   setTimeoutMs(
                     Math.min(600000, Math.max(1000, Number(event.target.value) || 1000)),
@@ -406,6 +420,7 @@ export function ModelConfigForm() {
                 max={10}
                 step={1}
                 value={maxRetries}
+                disabled={llmLocked}
                 onChange={(event) =>
                   setMaxRetries(Math.min(10, Math.max(0, Number(event.target.value) || 0)))
                 }
@@ -579,7 +594,7 @@ export function ModelConfigForm() {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" onClick={test} variant="outline" disabled={testing || saving}>
+          <Button type="button" onClick={test} variant="outline" disabled={llmLocked || testing || saving}>
             {testing ? <Spinner /> : <Plug />}
             {testing ? t("testing") : t("testGeneration")}
           </Button>
