@@ -2785,7 +2785,12 @@ class EngineManager:
 
         needle = pattern.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         stmt = (
-            select(SourceChunk.id, SourceChunk.heading, SourceChunk.content)
+            select(
+                SourceChunk.id,
+                SourceChunk.heading,
+                SourceChunk.content,
+                SourceChunk.source_id,
+            )
             .where(
                 SourceChunk.source_config_id == source_config_id,
                 SourceChunk.content.ilike(f"%{needle}%", escape="\\"),
@@ -2797,7 +2802,7 @@ class EngineManager:
         async with sf() as s:
             rows = (await s.execute(stmt)).all()
         out = []
-        for cid, heading, content in rows:
+        for cid, heading, content, document_source_id in rows:
             text = content or ""
             lowered = text.lower()
             needle = pattern.lower()
@@ -2839,6 +2844,7 @@ class EngineManager:
                     "chunk_id": cid,
                     "heading": display_heading,
                     "snippet": snippet,
+                    "source_id": document_source_id,
                 }
             )
         return out
