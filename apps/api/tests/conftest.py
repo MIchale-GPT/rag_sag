@@ -30,7 +30,8 @@ async def _isolate_persisted_jobs():
     from sqlalchemy import delete, inspect
 
     from sag_api.core.db import SessionLocal, engine
-    from sag_api.db.models import Job
+    from sag_api.db.models import Document, Job
+    from sag_api.enums import DocumentStatus
 
     async with engine.connect() as connection:
         exists = await connection.run_sync(lambda sync: inspect(sync).has_table(Job.__tablename__))
@@ -39,4 +40,15 @@ async def _isolate_persisted_jobs():
 
     async with SessionLocal() as session:
         await session.execute(delete(Job))
+        await session.execute(
+            delete(Document).where(
+                Document.status.in_(
+                    [
+                        DocumentStatus.PAUSING,
+                        DocumentStatus.DELETING,
+                        DocumentStatus.DELETE_FAILED,
+                    ]
+                )
+            )
+        )
         await session.commit()
