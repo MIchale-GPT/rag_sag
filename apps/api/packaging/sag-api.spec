@@ -29,6 +29,7 @@ for package in (
     "markitdown",
     "tiktoken",
     "tokenizers",
+    "octx",
     "zleap",
 ):
     package_datas, package_binaries, package_imports = collect_all(
@@ -74,6 +75,7 @@ for package in (
     "litellm",
     "markitdown",
     "mcp",
+    "octx",
 ):
     datas += copy_metadata(package, recursive=True)
 
