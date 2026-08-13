@@ -12,6 +12,11 @@ from typing import Any, Literal, Protocol
 from sag_api.core.config import settings
 from sag_api.core.logging import get_logger
 from sag_api.sag import RetrievedSection, SearchOutcome
+from sag_api.services.query_analysis import (
+    QueryAnalysis,
+    analyze_query,
+    normalize_lexical_text,
+)
 
 log = get_logger("retrieval")
 
@@ -168,29 +173,6 @@ def _document_source_exclusions(
     }
 
 
-_QUERY_NOISE = (
-    "知识库",
-    "资料库",
-    "资料中",
-    "文档中",
-    "告诉我",
-    "帮我查",
-    "搜索",
-    "查询",
-    "请问",
-    "关于",
-    "最新",
-    "最近",
-    "动态",
-    "消息",
-    "新闻",
-    "内容",
-    "资料",
-    "一下",
-    "是什么",
-    "有哪些",
-    "有什么",
-)
 _BOILERPLATE = (
     "新浪首页",
     "权利保护声明",
@@ -202,50 +184,34 @@ _BOILERPLATE = (
 _CITATION_RE = re.compile(r"\[(\d+)]")
 
 
-def _normalized(value: str) -> str:
-    return "".join(re.findall(r"[a-z0-9\u3400-\u9fff]+", value.lower()))
-
-
-def query_terms(query: str) -> list[str]:
-    """Extract a small, deterministic lexical signal without pretending to segment Chinese."""
-
-    cleaned = query.strip().lower()
-    for phrase in _QUERY_NOISE:
-        cleaned = cleaned.replace(phrase, " ")
-    candidates = re.findall(
-        r"[a-z0-9][a-z0-9_.+-]{1,31}|[\u3400-\u9fff]{2,16}",
-        cleaned,
-    )
-    terms: list[str] = []
-    for candidate in candidates:
-        value = candidate.strip()
-        if value and not value.isdigit() and value not in terms:
-            terms.append(value)
-    return terms[:4]
-
-
 def _section_key(section: RetrievedSection) -> tuple[str, str]:
     source = (section.source_config_id or section.source_id or "").strip()
     chunk = (section.chunk_id or "").strip()
     if chunk:
         return source, chunk
-    fingerprint = _normalized(f"{section.heading}\n{section.content}")[:240]
+    fingerprint = normalize_lexical_text(f"{section.heading}\n{section.content}")[:240]
     return source, fingerprint
 
 
-def _lexical_relevance(query: str, section: RetrievedSection) -> float:
-    heading = _normalized(section.heading)
-    content = _normalized(section.content)
+def _lexical_relevance(
+    query: str,
+    section: RetrievedSection,
+    *,
+    analysis: QueryAnalysis | None = None,
+) -> float:
+    effective = analysis or analyze_query(
+        query,
+        segmentation_enabled=settings.search_chinese_segmentation_enabled,
+    )
+    heading = normalize_lexical_text(section.heading)
+    content = normalize_lexical_text(section.content)
     text = f"{heading}{content}"
     if not text:
         return 0.0
 
-    terms = [_normalized(term) for term in query_terms(query)]
+    terms = [normalize_lexical_text(term) for term in effective.scoring_terms]
     terms = [term for term in terms if term]
-    cleaned_query = query
-    for phrase in _QUERY_NOISE:
-        cleaned_query = cleaned_query.replace(phrase, " ")
-    phrase = _normalized(cleaned_query)
+    phrase = effective.normalized_phrase
 
     score = 0.0
     if phrase and len(phrase) >= 2 and phrase in text:
@@ -280,9 +246,14 @@ def rerank_sections(
     *,
     lexical: list[RetrievedSection] | None = None,
     limit: int,
+    analysis: QueryAnalysis | None = None,
 ) -> RerankResult:
     """Hybrid rerank with an explicit relevance gate before anything reaches an answer."""
 
+    effective = analysis or analyze_query(
+        query,
+        segmentation_enabled=settings.search_chinese_segmentation_enabled,
+    )
     lexical = lexical or []
     exact_keys = {_section_key(section) for section in lexical}
     merged: dict[tuple[str, str], tuple[RetrievedSection, int]] = {}
@@ -309,7 +280,10 @@ def rerank_sections(
     top_raw = max(raw_scores, default=0.0)
     semantic_floor = max(0.35, top_raw * 0.68)
     denominator = max(1, len(candidates) - 1)
-    lexical_scores = {key: _lexical_relevance(query, section) for key, (section, _index) in candidates}
+    lexical_scores = {
+        key: _lexical_relevance(query, section, analysis=effective)
+        for key, (section, _index) in candidates
+    }
     has_lexical_signal = any(key in exact_keys or score >= 0.2 for key, score in lexical_scores.items())
     ranked: list[tuple[float, float, int, RetrievedSection]] = []
 
@@ -349,12 +323,12 @@ def rerank_sections(
 async def _lexical_sections(
     engine_manager: Any,
     sources: list[SearchSource],
-    query: str,
     *,
+    analysis: QueryAnalysis,
     exclude_source_ids_by_config: DocumentSourceExclusions | None = None,
 ) -> list[RetrievedSection]:
     grep_chunks = getattr(engine_manager, "grep_chunks", None)
-    terms = query_terms(query)
+    terms = analysis.lookup_terms
     if not callable(grep_chunks) or not terms:
         return []
 
@@ -415,6 +389,10 @@ async def retrieve_relevant_sections(
 ) -> SearchOutcome:
     """One retrieval contract for search UI and the Agent's search_context tool."""
 
+    analysis = analyze_query(
+        query,
+        segmentation_enabled=settings.search_chinese_segmentation_enabled,
+    )
     requested_limit = max(1, min(int(top_k or settings.search_top_k), 50))
     candidate_limit = min(50, max(requested_limit * 3, requested_limit + 8))
     targets = [(source.sag_source_config_id, source) for source in sources]
@@ -440,7 +418,7 @@ async def retrieve_relevant_sections(
         _lexical_sections(
             engine_manager,
             sources,
-            query,
+            analysis=analysis,
             exclude_source_ids_by_config=exclusions,
         ),
     )
@@ -462,6 +440,7 @@ async def retrieve_relevant_sections(
         semantic_sections,
         lexical=lexical_sections,
         limit=requested_limit,
+        analysis=analysis,
     )
     rerank_latency_ms = round((time.perf_counter() - rerank_start) * 1000, 2)
     total_latency_ms = round((time.perf_counter() - total_start) * 1000, 2)
@@ -473,6 +452,8 @@ async def retrieve_relevant_sections(
         "relevant": reranked.relevant_count,
         "filtered_irrelevant": reranked.filtered_count,
         "lexical_candidates": reranked.lexical_count,
+        "chinese_segmentation_used": analysis.chinese_segmentation_used,
+        "lexical_term_count": len(analysis.lookup_terms),
         "has_more": reranked.relevant_count > len(reranked.sections),
         "logically_deleted_filtered": hidden_count,
         "latency_engine_ms": engine_latency_ms,
@@ -533,15 +514,25 @@ async def recall_event_scores(
     return scores
 
 
-def _best_excerpt(query: str, section: RetrievedSection, limit: int = 260) -> str:
+def _best_excerpt(
+    query: str,
+    section: RetrievedSection,
+    limit: int = 260,
+    *,
+    analysis: QueryAnalysis | None = None,
+) -> str:
+    effective = analysis or analyze_query(
+        query,
+        segmentation_enabled=settings.search_chinese_segmentation_enabled,
+    )
     content = re.sub(r"\s+", " ", section.content).strip()
     if not content:
         return section.heading.strip()
     sentences = [part.strip() for part in re.split(r"(?<=[。！？.!?])", content) if part.strip()]
-    terms = [_normalized(term) for term in query_terms(query)]
+    terms = [normalize_lexical_text(term) for term in effective.scoring_terms]
     best = max(
         sentences or [content],
-        key=lambda sentence: sum(term in _normalized(sentence) for term in terms),
+        key=lambda sentence: sum(term in normalize_lexical_text(sentence) for term in terms),
     )
     return best[:limit] + ("…" if len(best) > limit else "")
 
@@ -549,7 +540,14 @@ def _best_excerpt(query: str, section: RetrievedSection, limit: int = 260) -> st
 def fallback_search_answer(query: str, sections: list[RetrievedSection]) -> str:
     if not sections:
         return ""
-    lines = [f"- {_best_excerpt(query, section)} [{index}]" for index, section in enumerate(sections[:4], 1)]
+    analysis = analyze_query(
+        query,
+        segmentation_enabled=settings.search_chinese_segmentation_enabled,
+    )
+    lines = [
+        f"- {_best_excerpt(query, section, analysis=analysis)} [{index}]"
+        for index, section in enumerate(sections[:4], 1)
+    ]
     return "根据与问题直接相关的证据：\n" + "\n".join(lines)
 
 

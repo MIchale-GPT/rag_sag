@@ -26,6 +26,7 @@ dependencies = [
     "charset-normalizer>=3.3,<4",
     "mcp>=1.28,<2",
     "tzdata>=2024.1",
+    "jieba-py>=0.46.12,<0.47",
 ]
 
 [project.optional-dependencies]

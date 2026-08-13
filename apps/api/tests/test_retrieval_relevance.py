@@ -48,6 +48,168 @@ def test_rerank_uses_semantic_floor_when_no_lexical_signal_exists():
     assert [item.chunk_id for item in result.sections] == ["strong"]
 
 
+def test_rerank_accepts_split_evidence_for_contiguous_chinese_query():
+    result = rerank_sections(
+        "肉类清汤",
+        [section("target", "烹饪说明", "肉类需要炖煮；清汤只需短时加热。", 0.1)],
+        limit=8,
+    )
+
+    assert [item.chunk_id for item in result.sections] == ["target"]
+
+
+@pytest.mark.asyncio
+async def test_contiguous_and_spaced_chinese_queries_return_same_core_evidence():
+    from uuid import uuid4
+
+    from sag_api.core.db import SessionLocal, init_db
+    from sag_api.db.models import Source
+    from sag_api.sag import SearchOutcome
+    from sag_api.services.retrieval_service import retrieve_relevant_sections
+
+    class LexicalEngine:
+        def __init__(self):
+            self.semantic_queries: list[str] = []
+            self.grep_calls: list[tuple[str, str]] = []
+
+        async def search_many(self, _targets, query, **_kwargs):
+            self.semantic_queries.append(query)
+            return SearchOutcome(query=query, sections=[], stats={})
+
+        async def grep_chunks(self, source_config_id, term, **_kwargs):
+            self.grep_calls.append((source_config_id, term))
+            rows = {
+                "肉类": [
+                    {
+                        "chunk_id": "chunk-meat",
+                        "heading": "炖煮肉类",
+                        "snippet": "肉类需要六十到一百二十分钟。",
+                        "source_id": "article-meat",
+                    }
+                ],
+                "清汤": [
+                    {
+                        "chunk_id": "chunk-soup",
+                        "heading": "快速清汤",
+                        "snippet": "清汤只需要五到十分钟。",
+                        "source_id": "article-soup",
+                    }
+                ],
+            }
+            return rows.get(term, [])
+
+    await init_db()
+    engine = LexicalEngine()
+    async with SessionLocal() as session:
+        source = Source(
+            name="chinese-query-equivalence",
+            sag_source_config_id=f"chinese-query-{uuid4().hex}",
+        )
+        session.add(source)
+        await session.commit()
+
+        contiguous = await retrieve_relevant_sections(engine, [source], "肉类清汤", top_k=8)
+        spaced = await retrieve_relevant_sections(engine, [source], "肉类 清汤", top_k=8)
+
+    assert engine.semantic_queries == ["肉类清汤", "肉类 清汤"]
+    assert [item.chunk_id for item in contiguous.sections] == [item.chunk_id for item in spaced.sections]
+    assert {item.chunk_id for item in contiguous.sections} == {"chunk-meat", "chunk-soup"}
+    assert contiguous.stats["chinese_segmentation_used"] is True
+    assert contiguous.stats["lexical_term_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_lexical_recall_is_bounded_to_four_terms_per_source(monkeypatch):
+    from uuid import uuid4
+
+    from sag_api.core.db import SessionLocal, init_db
+    from sag_api.db.models import Source
+    from sag_api.sag import SearchOutcome
+    from sag_api.services import retrieval_service
+    from sag_api.services.query_analysis import QueryAnalysis
+
+    class RecordingEngine:
+        def __init__(self):
+            self.grep_calls: list[tuple[str, str]] = []
+
+        async def search_many(self, _targets, query, **_kwargs):
+            return SearchOutcome(query=query, sections=[], stats={})
+
+        async def grep_chunks(self, source_config_id, term, **_kwargs):
+            self.grep_calls.append((source_config_id, term))
+            return []
+
+    analysis = QueryAnalysis(
+        normalized_phrase="甲乙丙丁戊己庚辛",
+        scoring_terms=("甲乙", "丙丁", "戊己", "庚辛"),
+        lookup_terms=("甲乙丙丁戊己庚辛", "甲乙", "丙丁", "戊己"),
+        chinese_segmentation_used=True,
+    )
+    monkeypatch.setattr(
+        retrieval_service,
+        "analyze_query",
+        lambda *_args, **_kwargs: analysis,
+        raising=False,
+    )
+    await init_db()
+    engine = RecordingEngine()
+    async with SessionLocal() as session:
+        sources = [
+            Source(name=f"bounded-{index}", sag_source_config_id=f"bounded-{index}-{uuid4().hex}")
+            for index in range(2)
+        ]
+        session.add_all(sources)
+        await session.commit()
+
+        outcome = await retrieval_service.retrieve_relevant_sections(
+            engine,
+            sources,
+            "甲乙丙丁戊己庚辛",
+        )
+
+    assert len(engine.grep_calls) == len(sources) * 4
+    assert outcome.stats["lexical_term_count"] == 4
+
+
+@pytest.mark.asyncio
+async def test_tokenizer_failure_preserves_semantic_retrieval(monkeypatch):
+    from uuid import uuid4
+
+    from sag_api.core.db import SessionLocal, init_db
+    from sag_api.db.models import Source
+    from sag_api.sag import SearchOutcome
+    from sag_api.services import query_analysis
+    from sag_api.services.retrieval_service import retrieve_relevant_sections
+
+    class SemanticEngine:
+        async def search_many(self, _targets, query, **_kwargs):
+            return SearchOutcome(
+                query=query,
+                sections=[section("semantic", "烹饪说明", "肉类需要炖煮，清汤需要控温。", 0.9)],
+                stats={},
+            )
+
+        async def grep_chunks(self, *_args, **_kwargs):
+            return []
+
+    def broken_segmenter(_text: str):
+        raise RuntimeError("tokenizer unavailable")
+
+    monkeypatch.setattr(query_analysis, "_jieba_segment", broken_segmenter)
+    await init_db()
+    async with SessionLocal() as session:
+        source = Source(
+            name="tokenizer-fallback",
+            sag_source_config_id=f"tokenizer-fallback-{uuid4().hex}",
+        )
+        session.add(source)
+        await session.commit()
+        outcome = await retrieve_relevant_sections(SemanticEngine(), [source], "肉类清汤")
+
+    assert [item.chunk_id for item in outcome.sections] == ["semantic"]
+    assert outcome.stats["chinese_segmentation_used"] is False
+
+
 def test_fallback_answer_cites_only_selected_sections():
     selected = [
         section("one", "公益行动", "张杰为乡村儿童建设音乐教室。", 0.9),
@@ -59,6 +221,25 @@ def test_fallback_answer_cites_only_selected_sections():
     assert "张杰为乡村儿童建设音乐教室" in answer
     assert "[1]" in answer and "[2]" in answer
     assert "[3]" not in answer
+
+
+def test_fallback_excerpt_honors_segmentation_rollback(monkeypatch):
+    from sag_api.core.config import settings
+
+    selected = [
+        section(
+            "target",
+            "烹饪说明",
+            "无关说明很长。肉类需要较长时间炖煮，清汤只需要五到十分钟。",
+            0.9,
+        )
+    ]
+    monkeypatch.setattr(settings, "search_chinese_segmentation_enabled", False)
+
+    answer = fallback_search_answer("肉类清汤", selected)
+
+    assert "无关说明很长" in answer
+    assert "肉类需要较长时间炖煮" not in answer
 
 
 @pytest.mark.asyncio
