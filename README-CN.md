@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://arxiv.org/abs/2606.15971"><img alt="论文" src="https://img.shields.io/badge/paper-arXiv%3A2606.15971-18181b" /></a>
+  <a href="https://arxiv.org/abs/2608.12129"><img alt="论文" src="https://img.shields.io/badge/paper-arXiv%3A2608.12129-18181b" /></a>
   <a href="https://pypi.org/project/zleap-sag/"><img alt="PyPI" src="https://img.shields.io/pypi/v/zleap-sag?label=zleap--sag&color=18181b" /></a>
   <img alt="SAG 版本" src="https://img.shields.io/badge/SAG-v1.5.3-18181b" />
   <a href="https://github.com/Zleap-AI/SAG/releases/latest"><img alt="桌面版发布" src="https://img.shields.io/github/v/release/Zleap-AI/SAG?label=desktop&color=18181b" /></a>
@@ -58,7 +58,7 @@ SAG 不是传统 RAG 与 GraphRAG 的融合，而是一套替代二者的原创�
 
 它通过 event-entity 索引与查询时动态超边，在一个系统中同时实现语义检索与关系推理，不再需要维护两套 RAG 系统或拼接两路召回结果。
 
-SAG 在 HotpotQA、2WikiMultiHopQA 和 MuSiQue 的 9 项 Recall@1/2/5 指标中取得 8 项最佳成绩，是当前 RAG 领域的新SOTA技术。
+SAG 在 HotpotQA、2WikiMultiHopQA 和 MuSiQue 的全部 12 项 Recall@1/2/5/10 指标上均达到最佳成绩，实现 RAG 领域的新 SOTA。
 
 本项目是基于 SAG 制作的面向个人与 Agent 的完整知识库应用：
 
@@ -86,12 +86,12 @@ SAG 在 HotpotQA、2WikiMultiHopQA 和 MuSiQue 的 9 项 Recall@1/2/5 指标中�
 ### 论文
 
 **SAG: SQL-Retrieval Augmented Generation with Query-Time Dynamic Hyperedges**<br>
-Yuchao Wu、Junqin Li、XingCheng Liang、Yongjie Chen、Yinghao Liang、Linyuan Mo、Guanxian Li
+Yuchao Wu*、Junqin Li、XingCheng Liang、Yongjie Chen、Yinghao Liang、Linyuan Mo、Guanxian Li
 
-[阅读论文](https://arxiv.org/abs/2606.15971) · [复现跑分](https://github.com/Zleap-AI/SAG-Benchmark)
+[阅读论文](https://arxiv.org/abs/2608.12129) · [复现跑分](https://github.com/Zleap-AI/SAG-Benchmark)
 
 <p align="center">
-  <a href="https://arxiv.org/abs/2606.15971">
+  <a href="https://arxiv.org/abs/2608.12129">
     <img src="docs/assets/readme/paper-first-page.png" alt="SAG 论文首页" width="900" />
   </a>
 </p>
@@ -116,7 +116,7 @@ event ↔ entities → 一条潜在超边
 SAG 内部的语义路径和结构路径都是 SAG 自己检索管线的组成部分，并不是一套传统 RAG 服务和一套 GraphRAG 服务同时运行。
 
 <p align="center">
-  <img src="docs/assets/readme/paper-architecture.jpeg" alt="SAG 论文原始架构图" width="940" />
+  <img src="docs/assets/readme/paper-sag-architecture.png" alt="SAG 论文原始架构图" width="940" />
 </p>
 
 ### 检索流程
@@ -139,22 +139,18 @@ SAG 内部的语义路径和结构路径都是 SAG 自己检索管线的组成�
 
 ### RAG 领域新 SOTA
 
-在相同的 `BGE-Large-EN-v1.5` Embedding 与 `Qwen3.6-Flash` LLM 配置下，SAG 在 HotpotQA、2WikiMultiHopQA 和 MuSiQue 的 **9 项 Recall@1/2/5 指标中取得 8 项最佳成绩**。平均 Recall@2/Recall@5 达到 **79.30%/88.18%**，HippoRAG 2 为 **68.14%/83.28%**。
+在相同的 `BGE-Large-EN-v1.5` Embedding 与 `Qwen3.6-Flash` LLM 配置下，SAG 在 HotpotQA、2WikiMultiHopQA 和 MuSiQue 的 **全部 12 项 Recall@1/2/5/10 指标上均达到最佳成绩**。
+
+- 三个数据集上，SAG 的平均 Recall@1/2/5/10 为 **42.81%/79.70%/90.07%/91.55%**，较 HippoRAG 2 提升 **3.67/11.56/6.79/3.44** 个百分点。
+- 在最具挑战的 MuSiQue 上，对应提升扩大至 **6.17/14.10/15.23/9.61** 个百分点。
 
 完整跑分如下：
 
-| 数据集 | 方法 | Recall@1 | Recall@2 | Recall@5 |
-| --- | --- | ---: | ---: | ---: |
-| HotpotQA | **SAG** | **47.80%** | **91.55%** | **96.50%** |
-| HotpotQA | HippoRAG 2 | 44.40% | 78.35% | 94.35% |
-| 2WikiMultiHopQA | **SAG** | **43.53%** | **82.30%** | 88.00% |
-| 2WikiMultiHopQA | HippoRAG 2 | 42.38% | 76.55% | **90.35%** |
-| MuSiQue | **SAG** | **36.17%** | **64.05%** | **80.04%** |
-| MuSiQue | HippoRAG 2 | 30.65% | 49.52% | 65.13% |
-| **平均** | **SAG** | **42.50%** | **79.30%** | **88.18%** |
-| **平均** | HippoRAG 2 | 39.14% | 68.14% | 83.28% |
+<p align="center">
+  <img src="docs/assets/readme/main-result.png" alt="SAG实验结果" width="940" />
+</p>
 
-完整方法与复现脚本见[论文](https://arxiv.org/abs/2606.15971)和 [SAG-Benchmark](https://github.com/Zleap-AI/SAG-Benchmark)。
+完整方法与复现脚本见[论文](https://arxiv.org/abs/2608.12129)和 [SAG-Benchmark](https://github.com/Zleap-AI/SAG-Benchmark)。
 
 ---
 
