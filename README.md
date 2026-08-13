@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://arxiv.org/abs/2606.15971"><img alt="Paper" src="https://img.shields.io/badge/paper-arXiv%3A2606.15971-18181b" /></a>
+  <a href="https://arxiv.org/abs/2608.12129"><img alt="Paper" src="https://img.shields.io/badge/paper-arXiv%3A2608.12129-18181b" /></a>
   <a href="https://pypi.org/project/zleap-sag/"><img alt="PyPI" src="https://img.shields.io/pypi/v/zleap-sag?label=zleap--sag&color=18181b" /></a>
   <img alt="SAG version" src="https://img.shields.io/badge/SAG-v1.5.3-18181b" />
   <a href="https://github.com/Zleap-AI/SAG/releases/latest"><img alt="Desktop release" src="https://img.shields.io/github/v/release/Zleap-AI/SAG?label=desktop&color=18181b" /></a>
@@ -58,7 +58,7 @@ SAG is not a fusion of traditional RAG and GraphRAG. It is an original retrieval
 
 Through event-entity indexing and query-time dynamic hyperedges, SAG delivers semantic retrieval and relational reasoning in one system, without maintaining two RAG systems or merging two retrieval paths.
 
-SAG achieves the best result on 8 of the 9 Recall@1/2/5 metrics across HotpotQA, 2WikiMultiHopQA, and MuSiQue, establishing a new state of the art for RAG.
+SAG achieves the best result on all 12 Recall@1/2/5/10 metrics across HotpotQA, 2WikiMultiHopQA, and MuSiQue, establishing a new state of the art for RAG.
 
 This project is a complete knowledge base application for individuals and Agents built on SAG:
 
@@ -86,12 +86,12 @@ The product is deliberately local-first and single-user. It starts with SQLite a
 ### Paper
 
 **SAG: SQL-Retrieval Augmented Generation with Query-Time Dynamic Hyperedges**<br>
-Yuchao Wu, Junqin Li, XingCheng Liang, Yongjie Chen, Yinghao Liang, Linyuan Mo, and Guanxian Li
+Yuchao Wu*, Junqin Li, XingCheng Liang, Yongjie Chen, Yinghao Liang, Linyuan Mo, and Guanxian Li
 
-[Read the paper](https://arxiv.org/abs/2606.15971) · [Reproduce the benchmark](https://github.com/Zleap-AI/SAG-Benchmark)
+[Read the paper](https://arxiv.org/abs/2608.12129) · [Reproduce the benchmark](https://github.com/Zleap-AI/SAG-Benchmark)
 
 <p align="center">
-  <a href="https://arxiv.org/abs/2606.15971">
+  <a href="https://arxiv.org/abs/2608.12129">
     <img src="docs/assets/readme/paper-first-page.png" alt="First page of the SAG paper" width="900" />
   </a>
 </p>
@@ -116,7 +116,7 @@ event ↔ entities → one latent hyperedge
 The semantic and structural paths inside SAG are native parts of the SAG pipeline. They are not a traditional RAG service and a GraphRAG service running side by side.
 
 <p align="center">
-  <img src="docs/assets/readme/paper-architecture.jpeg" alt="Original SAG paper architecture" width="940" />
+  <img src="docs/assets/readme/paper-sag-architecture.png" alt="Original SAG paper architecture" width="940" />
 </p>
 
 ### How retrieval works
@@ -139,22 +139,18 @@ This makes incremental writes natural: a new chunk adds its own event, entities,
 
 ### A new SOTA for RAG
 
-Under the same `BGE-Large-EN-v1.5` embedding and `Qwen3.6-Flash` LLM configuration, SAG reports the best result on **8 of 9 Recall@1/2/5 metrics** across HotpotQA, 2WikiMultiHopQA, and MuSiQue. Its average Recall@2/Recall@5 is **79.30%/88.18%**, compared with HippoRAG 2 at **68.14%/83.28%**.
+Under the same `BGE-Large-EN-v1.5` embedding and `Qwen3.6-Flash` LLM configuration, SAG achieves the best result on **all 12 Recall@1/2/5/10 metrics** across HotpotQA, 2WikiMultiHopQA, and MuSiQue.
+
+- Across the three datasets, SAG averages **42.81%/79.70%/90.07%/91.55%** on Recall@1/2/5/10, outperforming HippoRAG 2 by **3.67/11.56/6.79/3.44** percentage points.
+- On the most challenging MuSiQue dataset, the corresponding gains widen to **6.17/14.10/15.23/9.61** percentage points.
 
 Full results:
 
-| Dataset | Method | Recall@1 | Recall@2 | Recall@5 |
-| --- | --- | ---: | ---: | ---: |
-| HotpotQA | **SAG** | **47.80%** | **91.55%** | **96.50%** |
-| HotpotQA | HippoRAG 2 | 44.40% | 78.35% | 94.35% |
-| 2WikiMultiHopQA | **SAG** | **43.53%** | **82.30%** | 88.00% |
-| 2WikiMultiHopQA | HippoRAG 2 | 42.38% | 76.55% | **90.35%** |
-| MuSiQue | **SAG** | **36.17%** | **64.05%** | **80.04%** |
-| MuSiQue | HippoRAG 2 | 30.65% | 49.52% | 65.13% |
-| **Average** | **SAG** | **42.50%** | **79.30%** | **88.18%** |
-| **Average** | HippoRAG 2 | 39.14% | 68.14% | 83.28% |
+<p align="center">
+  <img src="docs/assets/readme/main-result.png" alt="SAG benchmark results" width="940" />
+</p>
 
-See the [paper](https://arxiv.org/abs/2606.15971) and [SAG-Benchmark](https://github.com/Zleap-AI/SAG-Benchmark) for the full method and reproduction scripts.
+See the [paper](https://arxiv.org/abs/2608.12129) and [SAG-Benchmark](https://github.com/Zleap-AI/SAG-Benchmark) for the full method and reproduction scripts.
 
 ---
 
