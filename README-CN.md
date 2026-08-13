@@ -58,7 +58,7 @@ SAG 不是传统 RAG 与 GraphRAG 的融合，而是一套替代二者的原创�
 
 它通过 event-entity 索引与查询时动态超边，在一个系统中同时实现语义检索与关系推理，不再需要维护两套 RAG 系统或拼接两路召回结果。
 
-SAG 在 HotpotQA、2WikiMultiHopQA 和 MuSiQue 的全部 12 项 Recall@1/2/5/10 指标上均达到最佳成绩，实现 RAG 领域的新 SOTA。
+在 HotpotQA、2WikiMultiHopQA 和 MuSiQue 上的实验表明，SAG 在每个基准测试中均取得最佳的检索与端到端 QA 性能，实现 RAG 领域的新 SOTA。
 
 本项目是基于 SAG 制作的面向个人与 Agent 的完整知识库应用：
 
@@ -139,10 +139,10 @@ SAG 内部的语义路径和结构路径都是 SAG 自己检索管线的组成�
 
 ### RAG 领域新 SOTA
 
-在相同的 `BGE-Large-EN-v1.5` Embedding 与 `Qwen3.6-Flash` LLM 配置下，SAG 在 HotpotQA、2WikiMultiHopQA 和 MuSiQue 的 **全部 12 项 Recall@1/2/5/10 指标上均达到最佳成绩**。
+在相同的 `BGE-Large-EN-v1.5` Embedding 与 `Qwen3.6-Flash` LLM 配置下，SAG 在 HotpotQA、2WikiMultiHopQA 和 MuSiQue 的每个基准测试中均取得最佳的检索与端到端 QA 性能。
 
-- 三个数据集上，SAG 的平均 Recall@1/2/5/10 为 **42.81%/79.70%/90.07%/91.55%**，较 HippoRAG 2 提升 **3.67/11.56/6.79/3.44** 个百分点。
-- 在最具挑战的 MuSiQue 上，对应提升扩大至 **6.17/14.10/15.23/9.61** 个百分点。
+- SAG 在三个数据集上的平均 Recall@5 和 F1 为 **90.07%/72.96%**，相比最强基准分别提升 **6.79/4.33** 个百分点。
+- 在最具挑战的 MuSiQue 上，Recall@5 和 F1 较各指标的最强基准分别提升 **11.52/7.01** 个百分点。
 
 完整跑分如下：
 
