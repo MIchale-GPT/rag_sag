@@ -389,6 +389,7 @@ async def retrieve_relevant_sections(
 ) -> SearchOutcome:
     """One retrieval contract for search UI and the Agent's search_context tool."""
 
+    total_start = time.perf_counter()
     analysis = analyze_query(
         query,
         segmentation_enabled=settings.search_chinese_segmentation_enabled,
@@ -396,7 +397,6 @@ async def retrieve_relevant_sections(
     requested_limit = max(1, min(int(top_k or settings.search_top_k), 50))
     candidate_limit = min(50, max(requested_limit * 3, requested_limit + 8))
     targets = [(source.sag_source_config_id, source) for source in sources]
-    total_start = time.perf_counter()
     engine_start = time.perf_counter()
     hidden = await _hidden_document_derivatives(sources)
     exclusions = _document_source_exclusions(hidden)

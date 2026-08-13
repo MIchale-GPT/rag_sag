@@ -119,6 +119,51 @@ async def test_contiguous_and_spaced_chinese_queries_return_same_core_evidence()
 
 
 @pytest.mark.asyncio
+async def test_natural_chinese_question_recalls_trailing_topic_term():
+    from uuid import uuid4
+
+    from sag_api.core.db import SessionLocal, init_db
+    from sag_api.db.models import Source
+    from sag_api.sag import SearchOutcome
+    from sag_api.services.retrieval_service import retrieve_relevant_sections
+
+    class LexicalEngine:
+        async def search_many(self, _targets, query, **_kwargs):
+            return SearchOutcome(query=query, sections=[], stats={})
+
+        async def grep_chunks(self, _source_config_id, term, **_kwargs):
+            if term != "清汤":
+                return []
+            return [
+                {
+                    "chunk_id": "chunk-soup",
+                    "heading": "快速清汤",
+                    "snippet": "清汤只需要五到十分钟。",
+                    "source_id": "article-soup",
+                }
+            ]
+
+    await init_db()
+    async with SessionLocal() as session:
+        source = Source(
+            name="natural-chinese-query",
+            sag_source_config_id=f"natural-chinese-query-{uuid4().hex}",
+        )
+        session.add(source)
+        await session.commit()
+
+        outcome = await retrieve_relevant_sections(
+            LexicalEngine(),
+            [source],
+            "如何制作肉类清汤",
+            top_k=8,
+        )
+
+    assert [item.chunk_id for item in outcome.sections] == ["chunk-soup"]
+    assert outcome.stats["lexical_term_count"] == 4
+
+
+@pytest.mark.asyncio
 async def test_lexical_recall_is_bounded_to_four_terms_per_source(monkeypatch):
     from uuid import uuid4
 
@@ -169,6 +214,41 @@ async def test_lexical_recall_is_bounded_to_four_terms_per_source(monkeypatch):
 
     assert len(engine.grep_calls) == len(sources) * 4
     assert outcome.stats["lexical_term_count"] == 4
+
+
+@pytest.mark.asyncio
+async def test_total_latency_includes_query_analysis(monkeypatch):
+    from types import SimpleNamespace
+
+    from sag_api.core.db import init_db
+    from sag_api.sag import SearchOutcome
+    from sag_api.services import query_analysis, retrieval_service
+
+    clock = [0.0]
+
+    def delayed_segmenter(_text: str):
+        clock[0] += 0.25
+        return ["肉类", "清汤"]
+
+    class EmptyEngine:
+        async def search_many(self, _targets, query, **_kwargs):
+            return SearchOutcome(query=query, sections=[], stats={})
+
+    monkeypatch.setattr(query_analysis, "_jieba_segment", delayed_segmenter)
+    monkeypatch.setattr(
+        retrieval_service,
+        "time",
+        SimpleNamespace(perf_counter=lambda: clock[0]),
+    )
+    await init_db()
+
+    outcome = await retrieval_service.retrieve_relevant_sections(
+        EmptyEngine(),
+        [],
+        "肉类清汤",
+    )
+
+    assert outcome.stats["latency_total_ms"] == 250.0
 
 
 @pytest.mark.asyncio

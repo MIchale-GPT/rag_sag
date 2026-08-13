@@ -14,7 +14,7 @@ def test_contiguous_and_spaced_chinese_have_equivalent_core_analysis():
     expected = QueryAnalysis(
         normalized_phrase="肉类清汤",
         scoring_terms=("肉类", "清汤"),
-        lookup_terms=("肉类清汤", "肉类", "清汤"),
+        lookup_terms=("肉类", "清汤", "肉类清汤"),
         chinese_segmentation_used=True,
     )
     assert contiguous == expected
@@ -29,7 +29,17 @@ def test_analysis_filters_single_characters_numbers_duplicates_and_noise():
 
     assert result.normalized_phrase == "a123肉类肉类"
     assert result.scoring_terms == ("肉类",)
-    assert result.lookup_terms == ("a123肉类肉类", "肉类")
+    assert result.lookup_terms == ("肉类", "a123肉类肉类")
+
+
+def test_natural_question_prioritizes_topic_terms_within_lookup_budget():
+    result = analyze_query(
+        "如何制作肉类清汤",
+        segmenter=lambda _text: ["如何", "制作", "肉类", "清汤"],
+    )
+
+    assert result.scoring_terms == ("制作", "肉类", "清汤")
+    assert result.lookup_terms == ("制作", "肉类", "清汤", "如何制作肉类清汤")
 
 
 def test_disabled_segmentation_uses_legacy_regex_terms():
@@ -57,4 +67,4 @@ def test_lookup_terms_are_deduplicated_and_capped_at_four():
         segmenter=lambda _text: ["甲乙", "丙丁", "戊己", "庚辛"],
     )
 
-    assert result.lookup_terms == ("甲乙丙丁戊己庚辛", "甲乙", "丙丁", "戊己")
+    assert result.lookup_terms == ("甲乙", "丙丁", "戊己", "庚辛")

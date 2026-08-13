@@ -29,6 +29,21 @@ _QUERY_NOISE = (
     "有哪些",
     "有什么",
 )
+_QUERY_INSTRUCTION_TERMS = frozenset(
+    {
+        "如何",
+        "怎么",
+        "怎样",
+        "为什么",
+        "为何",
+        "是否",
+        "能否",
+        "进行",
+        "介绍",
+        "说明",
+        "解释",
+    }
+)
 _CHINESE_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
 _LEXICAL_PART_RE = re.compile(
     r"[a-z0-9][a-z0-9_.+-]{1,31}|[\u3400-\u9fff]+",
@@ -102,7 +117,12 @@ def _segmented_terms(cleaned: str, segmenter: Segmenter) -> tuple[str, ...]:
             values.extend(segmenter(part))
         else:
             values.append(part)
-    return _bounded_unique(values, limit=4)
+    informative = (
+        value
+        for value in values
+        if normalize_lexical_text(value) not in _QUERY_INSTRUCTION_TERMS
+    )
+    return _bounded_unique(informative, limit=4)
 
 
 def analyze_query(
@@ -123,7 +143,7 @@ def analyze_query(
     except Exception:  # noqa: BLE001 -- retrieval must survive tokenizer failure
         return QueryAnalysis(phrase, legacy_terms, legacy_terms, False)
 
-    lookup_terms = _bounded_unique((phrase, *scoring_terms), limit=4)
+    lookup_terms = _bounded_unique((*scoring_terms, phrase), limit=4)
     return QueryAnalysis(phrase, scoring_terms, lookup_terms, True)
 
 
