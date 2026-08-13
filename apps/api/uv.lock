@@ -1187,6 +1187,15 @@ wheels = [
 ]
 
 [[package]]
+name = "jieba-py"
+version = "0.46.12"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6a/03/f940a9f8fc2441ef1175369c01726add656dc55fea9edf1421733467050d/jieba_py-0.46.12.tar.gz", hash = "sha256:c74a4ecf7e579c00915feeefd40e54450c1616ddfa18497cb0d42563f7e4eb97", size = 5310676, upload-time = "2026-04-20T23:27:27.077Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f3/26/b7bbcedc1bfa49fe44d71233819deb95026f13ed10936a175c6b2f8a0f05/jieba_py-0.46.12-py3-none-any.whl", hash = "sha256:a4f616b571cbb2f3668608973bcd882a04e2faa94b95338acbbddf3cbe111930", size = 5403721, upload-time = "2026-04-20T23:27:18.386Z" },
+]
+
+[[package]]
 name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -3293,6 +3302,7 @@ dependencies = [
     { name = "charset-normalizer" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "jieba-py" },
     { name = "litellm" },
     { name = "markitdown", extra = ["docx", "pdf", "pptx", "xls", "xlsx"] },
     { name = "mcp" },
@@ -3335,6 +3345,7 @@ requires-dist = [
     { name = "charset-normalizer", specifier = ">=3.3,<4" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "jieba-py", specifier = ">=0.46.12,<0.47" },
     { name = "litellm", specifier = ">=1.92,<2" },
     { name = "markitdown", extras = ["docx", "pdf", "pptx", "xls", "xlsx"], specifier = ">=0.1.6,<0.2" },
     { name = "mcp", specifier = ">=1.28,<2" },

@@ -52,6 +52,18 @@ def test_legacy_atomic_env_strategy_maps_to_precise(monkeypatch):
     assert Settings(_env_file=None).search_strategy == "multi"
 
 
+def test_chinese_query_segmentation_is_enabled_by_default(monkeypatch):
+    monkeypatch.delenv("SAG_SEARCH_CHINESE_SEGMENTATION_ENABLED", raising=False)
+
+    assert Settings(_env_file=None).search_chinese_segmentation_enabled is True
+
+
+def test_chinese_query_segmentation_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("SAG_SEARCH_CHINESE_SEGMENTATION_ENABLED", "false")
+
+    assert Settings(_env_file=None).search_chinese_segmentation_enabled is False
+
+
 def test_timezone_defaults_to_beijing_and_rejects_invalid(monkeypatch):
     monkeypatch.delenv("SAG_TIMEZONE", raising=False)
     assert Settings(_env_file=None).timezone == "Asia/Shanghai"

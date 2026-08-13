@@ -165,6 +165,8 @@ class Settings(BaseSettings):
     # 全库检索先选有界信源候选；@ 显式范围同样受此硬上限保护。
     search_source_candidate_limit: int = Field(default=16, ge=1, le=256)
     search_source_concurrency: int = Field(default=4, ge=1, le=32)
+    # 中文连续查询默认进行查询侧分词；可关闭以回退到原有正则词项行为。
+    search_chinese_segmentation_enabled: bool = True
     # 精确模式（multi）含查询侧 LLM 往返；超时/失败/空结果自动回退快速模式（vector）。
     search_source_timeout: float = 12.0
     search_fallback_vector: bool = True
