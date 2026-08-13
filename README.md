@@ -62,7 +62,7 @@ SAG is not a fusion of traditional RAG and GraphRAG. It is an original retrieval
 
 Through event-entity indexing and query-time dynamic hyperedges, SAG delivers semantic retrieval and relational reasoning in one system, without maintaining two RAG systems or merging two retrieval paths.
 
-SAG achieves the best result on all 12 Recall@1/2/5/10 metrics across HotpotQA, 2WikiMultiHopQA, and MuSiQue, establishing a new state of the art for RAG.
+Experiments on HotpotQA, 2WikiMultiHopQA, and MuSiQue show that SAG achieves the best retrieval and end-to-end QA performance on every benchmark, establishing a new state of the art for RAG.
 
 This project is a complete knowledge base application for individuals and Agents built on SAG:
 
@@ -143,10 +143,10 @@ This makes incremental writes natural: a new chunk adds its own event, entities,
 
 ### A new SOTA for RAG
 
-Under the same `BGE-Large-EN-v1.5` embedding and `Qwen3.6-Flash` LLM configuration, SAG achieves the best result on **all 12 Recall@1/2/5/10 metrics** across HotpotQA, 2WikiMultiHopQA, and MuSiQue.
+Under the same `BGE-Large-EN-v1.5` embedding and `Qwen3.6-Flash` LLM configuration, SAG achieves the best retrieval and end-to-end QA performance on every benchmark across HotpotQA, 2WikiMultiHopQA, and MuSiQue.
 
-- Across the three datasets, SAG averages **42.81%/79.70%/90.07%/91.55%** on Recall@1/2/5/10, outperforming HippoRAG 2 by **3.67/11.56/6.79/3.44** percentage points.
-- On the most challenging MuSiQue dataset, the corresponding gains widen to **6.17/14.10/15.23/9.61** percentage points.
+- Across the three datasets, SAG averages **90.07%/72.96%** in Recall@5 and F1, outperforming the strongest baseline for each metric by **6.79/4.33** percentage points, respectively.
+- On the most challenging MuSiQue dataset, SAG outperforms the strongest baseline for each metric by **11.52/7.01** percentage points in Recall@5 and F1, respectively.
 
 Full results:
 
