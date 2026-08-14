@@ -5,8 +5,10 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { api, ApiError } from "@/lib/api";
+import type { SagDesktopDiagnosticsInfo } from "@/lib/desktop-bridge";
 import { OctxExportTaskManager } from "@/lib/octx-export-manager";
 import { exportDismissDelay } from "@/lib/octx-export-dismissal";
+import { getDiagnosticsStore, sanitize } from "@/lib/diagnostics";
 import {
   isActiveExportForSource,
   OCTX_EXPORT_TASKS_STORAGE_KEY,
@@ -18,10 +20,17 @@ const POLL_INTERVAL_MS = 1500;
 interface OctxExportsContextValue {
   tasks: PersistedOctxExportTask[];
   startExport: (sourceId: string, sourceName: string) => Promise<void>;
+  startDocumentExport: (
+    sourceId: string,
+    sourceName: string,
+    documentId: string,
+    documentName: string,
+  ) => Promise<void>;
   confirmReadyOnly: (transferId: string, decisionToken: string) => Promise<void>;
   cancelDecision: (transferId: string, decisionToken: string) => Promise<void>;
   cancelTransfer: (transferId: string) => Promise<void>;
   downloadAgain: (transferId: string) => Promise<void>;
+  downloadDiagnostics: (transferId: string) => Promise<void>;
   dismissTransfer: (transferId: string) => void;
   isSourceExporting: (sourceId: string) => boolean;
 }
@@ -47,6 +56,29 @@ function artifactFilename(task: PersistedOctxExportTask): string {
   return `${stem}-${version}.octx`;
 }
 
+function downloadJson(value: unknown, filename: string) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+  triggerDownload(blob, filename);
+}
+
+export function projectDesktopDiagnostics(
+  info: SagDesktopDiagnosticsInfo,
+): Record<string, string | number | boolean> {
+  return {
+    version: info.version,
+    platform: info.platform,
+    arch: info.arch,
+    os_release: info.osRelease,
+    os_version: info.osVersion,
+    packaged: info.packaged,
+    electron: info.electron,
+    chrome: info.chrome,
+    node: info.node,
+    log_file_count: info.logFiles.length,
+    has_truncated_logs: info.logFiles.some((file) => file.truncated),
+  };
+}
+
 export function OctxExportProvider({ children }: { children: React.ReactNode }) {
   const t = useTranslations("SourceCard");
   const [tasks, setTasks] = React.useState<PersistedOctxExportTask[]>([]);
@@ -58,6 +90,7 @@ export function OctxExportProvider({ children }: { children: React.ReactNode }) 
       save: (value) => window.localStorage.setItem(OCTX_EXPORT_TASKS_STORAGE_KEY, value),
       getTransfer: api.getOctxTransfer,
       startExport: api.startOctxExport,
+      startDocumentExport: api.startOctxDocumentExport,
       decideExport: (transferId, decisionToken) =>
         api.decideOctxExport(transferId, {
           action: "export_ready_only",
@@ -74,6 +107,7 @@ export function OctxExportProvider({ children }: { children: React.ReactNode }) 
         triggerDownload(blob, artifactFilename(task));
         toast.success(t("exportReady"));
       },
+      recordEvent: (type, data) => getDiagnosticsStore().record(type, data),
       now: () => new Date().toISOString(),
     });
     managerRef.current = manager;
@@ -123,6 +157,29 @@ export function OctxExportProvider({ children }: { children: React.ReactNode }) 
     [reportError],
   );
 
+  const startDocumentExport = React.useCallback(
+    async (
+      sourceId: string,
+      sourceName: string,
+      documentId: string,
+      documentName: string,
+    ) => {
+      if (isActiveExportForSource(tasks, sourceId)) return;
+      try {
+        await managerRef.current?.startDocument(
+          sourceId,
+          sourceName,
+          documentId,
+          documentName,
+        );
+        toast.message(t("exportStarted"));
+      } catch (error) {
+        reportError(error);
+      }
+    },
+    [reportError, t, tasks],
+  );
+
   const cancelTransfer = React.useCallback(
     async (transferId: string) => {
       try {
@@ -160,6 +217,47 @@ export function OctxExportProvider({ children }: { children: React.ReactNode }) 
     managerRef.current?.dismiss(transferId);
   }, []);
 
+  const downloadDiagnostics = React.useCallback(
+    async (transferId: string) => {
+      try {
+        const server = await api.getOctxTransferDiagnostics(transferId);
+        let desktop: Record<string, unknown> | null = null;
+        if (window.sagDesktop?.getDiagnosticsInfo) {
+          try {
+            const info = await window.sagDesktop.getDiagnosticsInfo();
+            desktop = projectDesktopDiagnostics(info);
+          } catch {
+            desktop = {
+              collection_error: "desktop_diagnostics_unavailable",
+            };
+          }
+        }
+        const frontend = getDiagnosticsStore().export({
+          app: window.sagDesktop?.isDesktop ? "desktop" : "web",
+          desktop_version: typeof desktop?.version === "string" ? desktop.version : undefined,
+          user_agent: navigator.userAgent,
+          language: navigator.language,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        });
+        downloadJson(
+          sanitize({
+            schema_version: 1,
+            exported_at: new Date().toISOString(),
+            transfer_id: transferId,
+            server,
+            frontend,
+            desktop,
+          }),
+          `sag-octx-diagnostics-${transferId}.json`,
+        );
+        toast.success(t("exportDiagnosticsReady"));
+      } catch (error) {
+        reportError(error);
+      }
+    },
+    [reportError, t],
+  );
+
   React.useEffect(() => {
     const timers = tasks.flatMap((task) => {
       const delay = exportDismissDelay(task);
@@ -173,10 +271,12 @@ export function OctxExportProvider({ children }: { children: React.ReactNode }) 
     () => ({
       tasks,
       startExport,
+      startDocumentExport,
       confirmReadyOnly,
       cancelDecision,
       cancelTransfer,
       downloadAgain,
+      downloadDiagnostics,
       dismissTransfer,
       isSourceExporting: (sourceId) => isActiveExportForSource(tasks, sourceId),
     }),
@@ -186,6 +286,8 @@ export function OctxExportProvider({ children }: { children: React.ReactNode }) 
       confirmReadyOnly,
       dismissTransfer,
       downloadAgain,
+      downloadDiagnostics,
+      startDocumentExport,
       startExport,
       tasks,
     ],
