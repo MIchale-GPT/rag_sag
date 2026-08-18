@@ -18,7 +18,7 @@ from sag_api.core.errors import (
     UpstreamError,
     ValidationError,
 )
-from sag_api.parsing.mineru import MinerUClient
+from sag_api.parsing.mineru import MinerUClient, PauseCallback
 from sag_api.parsing.ocr import OcrClient
 from sag_api.parsing.text import TextDecodingError, is_plain_text_path, read_text_file
 
@@ -41,6 +41,7 @@ async def prepare_document(
     *,
     state: dict[str, Any] | None = None,
     on_state: ParseStateCallback | None = None,
+    should_pause: PauseCallback | None = None,
 ) -> PreparedDocument:
     """返回可直接交给 zleap-sag 的 Markdown 路径，保留原始上传文件。"""
     suffix = os.path.splitext(path)[1].lower()
@@ -55,17 +56,29 @@ async def prepare_document(
     signature = _signature(provider, settings)
     cache_path = f"{path}.parsed.{signature}.md"
     if _is_cached(cache_path):
+        await _emit_cached_state(
+            state, provider, signature, cache_path, settings, on_state
+        )
         return PreparedDocument(path=cache_path, provider=provider, cached=True)
     cached_fallback = _cached_fallback_document(path, provider, signature, settings)
     if cached_fallback:
+        await _emit_cached_fallback_state(
+            state, signature, cached_fallback, settings, on_state
+        )
         return cached_fallback
 
     # 同一进程内同一文档只做一次转换，避免并发“重新处理”重复创建付费任务。
     async with _lock_for(cache_path):
         if _is_cached(cache_path):
+            await _emit_cached_state(
+                state, provider, signature, cache_path, settings, on_state
+            )
             return PreparedDocument(path=cache_path, provider=provider, cached=True)
         cached_fallback = _cached_fallback_document(path, provider, signature, settings)
         if cached_fallback:
+            await _emit_cached_fallback_state(
+                state, signature, cached_fallback, settings, on_state
+            )
             return cached_fallback
         return await _prepare_and_cache(
             path,
@@ -75,6 +88,52 @@ async def prepare_document(
             settings,
             state=state,
             on_state=on_state,
+            should_pause=should_pause,
+        )
+
+
+async def _emit_cached_fallback_state(
+    state: dict[str, Any] | None,
+    signature: str,
+    prepared: PreparedDocument,
+    settings: Settings,
+    on_state: ParseStateCallback | None,
+) -> None:
+    if not on_state:
+        return
+    fallback = state.get("fallback") if isinstance(state, dict) else None
+    fallback_state = dict(fallback) if isinstance(fallback, dict) else {}
+    await on_state(
+        {
+            **_compatible_state(state, "mineru", signature, settings),
+            "status": "fallback_done",
+            "fallback": {
+                **fallback_state,
+                "provider": "markitdown",
+                "status": "done",
+                "cached": True,
+                "mineru_error": fallback_state.get("mineru_error")
+                or prepared.fallback_error,
+            },
+        }
+    )
+
+
+async def _emit_cached_state(
+    state: dict[str, Any] | None,
+    provider: Literal["markitdown", "mineru"],
+    signature: str,
+    cache_path: str,
+    settings: Settings,
+    on_state: ParseStateCallback | None,
+) -> None:
+    if on_state:
+        await on_state(
+            {
+                **_compatible_state(state, provider, signature, settings),
+                "status": "done",
+                "cache_path": cache_path,
+            }
         )
 
 
@@ -87,6 +146,7 @@ async def _prepare_and_cache(
     *,
     state: dict[str, Any] | None,
     on_state: ParseStateCallback | None,
+    should_pause: PauseCallback | None = None,
 ) -> PreparedDocument:
     parser_state = _compatible_state(state, provider, signature, settings)
     current_state = dict(parser_state)
@@ -138,7 +198,7 @@ async def _prepare_and_cache(
             )
         try:
             markdown = await MinerUClient(settings).parse(
-                path, state=parser_state, on_state=track_state
+                path, state=parser_state, on_state=track_state, should_pause=should_pause
             )
         except ApiError as mineru_error:
             return await _prepare_markitdown_fallback(
@@ -361,6 +421,11 @@ def parsed_sidecar_paths(path: str) -> list[str]:
 
 def _signature(provider: str, settings: Settings) -> str:
     if provider == "mineru":
+        if settings.mineru_provider == "official":
+            return (
+                f"mineru-official-{settings.mineru_official_model}-"
+                f"{settings.mineru_parse_method}"
+            )
         return f"mineru-{settings.mineru_version}-{settings.mineru_parse_method}"
     if provider == "ocr":
         return f"ocr-{settings.ocr_model}"
@@ -382,6 +447,14 @@ def _compatible_state(
         else "",
     }
     current = dict(state or {})
+    if provider == "mineru":
+        expected["mineru_service"] = settings.mineru_provider
+        if settings.mineru_provider == "official":
+            expected["mineru_model"] = settings.mineru_official_model
+        else:
+            expected["mineru_version"] = settings.mineru_version
+        if settings.mineru_provider == "302" and "mineru_service" not in current:
+            current["mineru_service"] = "302"
     if any(current.get(key) != value for key, value in expected.items()):
         return expected
     return current

@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Download,
   FileText,
   FlaskConical,
   List,
@@ -20,12 +21,19 @@ import {
 import { useApp } from "@/components/features/app-shell";
 import { DocumentList } from "@/components/features/document-list";
 import { EmptyState } from "@/components/features/empty-state";
+import {
+  dismissFolderImportDialog,
+  FolderImportDialog,
+  type FolderImportDialogHandle,
+} from "@/components/features/folder-import-dialog";
 import { RetrievalTestDialog } from "@/components/features/retrieval-test-dialog";
 import { SourceIdCopy } from "@/components/features/source-id-copy";
 import { SourceGraph } from "@/components/features/source-graph";
 import { SyncPanel } from "@/components/features/sync-panel";
 import { UploadZone } from "@/components/features/upload-zone";
 import { useSourceContent } from "@/components/features/use-source-content";
+import { useOctxExports } from "@/components/features/octx-export-provider";
+import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,6 +43,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Tooltip,
   TooltipContent,
@@ -48,6 +57,7 @@ type ContentView = "list" | "graph" | "graph3d";
 
 export default function SourceDetailPage() {
   const t = useTranslations("Knowledge");
+  const tCard = useTranslations("SourceCard");
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const { capabilities } = useApp();
@@ -82,8 +92,18 @@ export default function SourceDetailPage() {
   }, [notFound, router]);
 
   const [addOpen, setAddOpen] = React.useState(false);
+  const folderImportDialogRef = React.useRef<FolderImportDialogHandle>(null);
   const [retrievalOpen, setRetrievalOpen] = React.useState(false);
   const isFileSource = !source || source.connector_kind === "file_upload";
+
+  const { startExport, isSourceExporting } = useOctxExports();
+  const exportRunning = source ? isSourceExporting(source.id) : false;
+
+  const handleExport = React.useCallback(() => {
+    if (!source || exportRunning) return;
+    toast.message(tCard("exporting"));
+    void startExport(source.id, source.name);
+  }, [exportRunning, source, startExport, tCard]);
 
   return (
     <div
@@ -159,6 +179,25 @@ export default function SourceDetailPage() {
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">{t("retrievalTest")}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handleExport}
+                disabled={!source || exportRunning}
+                aria-label={tCard("export")}
+                title={tCard("export")}
+              >
+                {exportRunning ? (
+                  <Spinner className="size-4" />
+                ) : (
+                  <Download className="size-4" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{tCard("export")}</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -287,6 +326,7 @@ export default function SourceDetailPage() {
           ) : (
             <DocumentList
               sourceId={id}
+              sourceName={source.name}
               documents={documents}
               activities={documentActivities}
               onAction={mutateDocument}
@@ -295,7 +335,13 @@ export default function SourceDetailPage() {
         </div>
       </div>
 
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+      <Dialog
+        open={addOpen}
+        onOpenChange={(open) => {
+          if (open) setAddOpen(true);
+          else dismissFolderImportDialog(folderImportDialogRef.current, setAddOpen);
+        }}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>
@@ -309,15 +355,38 @@ export default function SourceDetailPage() {
           </DialogHeader>
           {source &&
             (source.connector_kind === "file_upload" ? (
-              <UploadZone
-                sourceId={id}
-                onUploaded={() => {
-                  setAddOpen(false);
-                  void refresh();
-                }}
-                maxMb={capabilities?.max_upload_mb ?? 25}
-                allowedExts={capabilities?.allowed_upload_exts}
-              />
+              <div className="flex flex-col gap-4">
+                <UploadZone
+                  sourceId={id}
+                  onUploaded={() => {
+                    dismissFolderImportDialog(
+                      folderImportDialogRef.current,
+                      setAddOpen,
+                    );
+                    void refresh();
+                  }}
+                  maxMb={capabilities?.max_upload_mb ?? 25}
+                  allowedExts={capabilities?.allowed_upload_exts}
+                />
+                <FolderImportDialog
+                  ref={folderImportDialogRef}
+                  sourceId={id}
+                  existingDocumentNames={(documents ?? []).map(
+                    (document) => document.filename,
+                  )}
+                  allowedExts={capabilities?.allowed_upload_exts ?? []}
+                  maxMb={capabilities?.max_upload_mb ?? 25}
+                  onFinished={(result) => {
+                    if (result.attempted > 0) void refresh();
+                  }}
+                  onClose={() =>
+                    dismissFolderImportDialog(
+                      folderImportDialogRef.current,
+                      setAddOpen,
+                    )
+                  }
+                />
+              </div>
             ) : (
               <SyncPanel
                 sourceId={id}

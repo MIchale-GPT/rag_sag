@@ -57,9 +57,11 @@ class ModelConfigUpdate(BaseModel):
     embedding_dimensions: int | None = Field(default=None, ge=1, le=8192)
 
     document_parser: Literal["auto", "markitdown", "mineru", "ocr"] | None = None
+    mineru_provider: Literal["302", "official"] | None = None
     mineru_base_url: str | None = Field(default=None, max_length=500)
     mineru_api_key: str | None = Field(default=None, max_length=500)
     mineru_version: Literal["2.0", "2.5"] | None = None
+    mineru_official_model: Literal["pipeline", "vlm"] | None = None
     ocr_base_url: str | None = Field(default=None, max_length=500)
     ocr_api_key: str | None = Field(default=None, max_length=500)
     ocr_model: str | None = Field(default=None, min_length=1, max_length=200)
@@ -71,11 +73,16 @@ class ModelConfigUpdate(BaseModel):
     search_top_k: int | None = Field(default=None, ge=1, le=50)
     sag_language: Literal["zh", "en"] | None = None
 
-    @field_validator("document_parser", "mineru_version")
+    @field_validator(
+        "document_parser",
+        "mineru_provider",
+        "mineru_version",
+        "mineru_official_model",
+    )
     @classmethod
     def reject_null_parser_fields(cls, value: str | None) -> str:
         if value is None:
-            raise ValueError("解析器与 MinerU 版本不能为 null")
+            raise ValueError("解析器与 MinerU 服务商/模型配置不能为 null")
         return value
 
     @field_validator("document_extract_concurrency", "document_chunk_max_tokens")

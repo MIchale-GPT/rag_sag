@@ -34,6 +34,8 @@ import type {
   BackgroundJob,
   ExplorationDetail,
   ExplorationSession,
+  OctxImportAction,
+  OctxTransfer,
 } from "./types";
 
 /** 浏览器通过局域网 IP 打开前端时，自动将 API 指向同主机 8000 端口。 */
@@ -83,6 +85,15 @@ export class ApiError extends Error {
     this.stage = dimensions?.stage;
     this.retryable = dimensions?.retryable;
   }
+}
+
+export interface UploadDocumentOptions {
+  folderImportId?: string;
+}
+
+export interface UploadDocumentResult {
+  document: Doc;
+  requestId?: string;
 }
 
 export interface GlobalSearchBody {
@@ -546,6 +557,82 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     : ((await res.text()) as unknown as T);
 }
 
+function isRetryableOctxExportStartError(error: unknown): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    ((error.status === 0 && (error.code === "timeout" || error.code === "network")) ||
+      (error.code === "conflict" && error.retryable === true))
+  );
+}
+
+async function startOctxExport(
+  sourceId: string,
+  version?: string,
+): Promise<OctxTransfer> {
+  const submit = () =>
+    request<OctxTransfer>(`/api/v1/sources/${sourceId}/octx-exports`, {
+      method: "POST",
+      body: JSON.stringify(version ? { version } : {}),
+    });
+
+  try {
+    return await submit();
+  } catch (error) {
+    if (!isRetryableOctxExportStartError(error)) throw error;
+  }
+
+  // 创建导出任务是服务端幂等操作。首次响应在高频抽取写库期间丢失时，
+  // 再次提交会取回同一个活动任务，而不会重复创建或重复打包。
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  try {
+    return await submit();
+  } catch (error) {
+    if (!isRetryableOctxExportStartError(error)) throw error;
+    throw new ApiError(
+      error.status,
+      "octx_export_start_busy",
+      clientErrorMessage("octxExportStartBusy"),
+      error.requestId,
+      { layer: error.layer, stage: error.stage, retryable: true },
+    );
+  }
+}
+
+async function startOctxDocumentExport(
+  sourceId: string,
+  documentId: string,
+  version?: string,
+): Promise<OctxTransfer> {
+  const transferId = crypto.randomUUID().replaceAll("-", "");
+  const submit = () =>
+    request<OctxTransfer>(
+      `/api/v1/sources/${sourceId}/documents/${documentId}/octx-exports`,
+      {
+        method: "POST",
+        body: JSON.stringify(version ? { version } : {}),
+        headers: { "X-OCTX-Transfer-ID": transferId },
+      },
+    );
+  try {
+    return await submit();
+  } catch (error) {
+    if (!isRetryableOctxExportStartError(error)) throw error;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  try {
+    return await submit();
+  } catch (error) {
+    if (!isRetryableOctxExportStartError(error)) throw error;
+    throw new ApiError(
+      error.status,
+      "octx_export_start_busy",
+      clientErrorMessage("octxExportStartBusy"),
+      error.requestId,
+      { layer: error.layer, stage: error.stage, retryable: true },
+    );
+  }
+}
+
 export const api = {
   // auth / system
   register: (b: { email: string; password: string; name?: string }) =>
@@ -631,23 +718,35 @@ export const api = {
     sid: string,
     file: File,
     onProgress: (pct: number) => void,
+    onUploadComplete?: () => void,
+    options?: UploadDocumentOptions,
   ) =>
-    new Promise<Doc>((resolve, reject) => {
+    new Promise<UploadDocumentResult>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `${API_BASE}/api/v1/sources/${sid}/documents`);
       xhr.setRequestHeader("Authorization", `Bearer ${getToken() ?? ""}`);
       xhr.setRequestHeader("Accept-Language", readClientLocale());
+      if (options?.folderImportId) {
+        xhr.setRequestHeader("X-SAG-Folder-Import-Id", options.folderImportId);
+      }
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable)
           onProgress(Math.round((e.loaded / e.total) * 100));
       };
+      xhr.upload.onload = () => onUploadComplete?.();
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300)
-          resolve(JSON.parse(xhr.responseText));
+          resolve({
+            document: JSON.parse(xhr.responseText),
+            requestId: xhr.getResponseHeader("X-Request-Id") ?? undefined,
+          });
         else {
           let msg = clientErrorMessage("uploadFailed");
+          let requestId: string | undefined;
           try {
-            msg = JSON.parse(xhr.responseText)?.error?.message ?? msg;
+            const error = JSON.parse(xhr.responseText)?.error;
+            msg = error?.message ?? msg;
+            requestId = error?.request_id;
           } catch {
             /* noop */
           }
@@ -656,6 +755,7 @@ export const api = {
               xhr.status,
               "upload_failed",
               serverErrorMessage("upload_failed", msg, xhr.status),
+              requestId,
             ),
           );
         }
@@ -976,4 +1076,76 @@ export const api = {
 
   // 整个 SAG 知识库的 MCP 挂载信息
   knowledgeMcp: () => request<KnowledgeMcpDescriptor>("/api/v1/system/mcp"),
+
+  // OCTX 数据包导入/导出
+  startOctxExport,
+  startOctxDocumentExport,
+  getOctxTransfer: (transferId: string) =>
+    request<OctxTransfer>(`/api/v1/octx/transfers/${transferId}`),
+  getOctxTransferDiagnostics: (transferId: string) =>
+    request<Record<string, unknown>>(`/api/v1/octx/transfers/${transferId}/diagnostics`),
+  cancelOctxTransfer: (transferId: string) =>
+    request<OctxTransfer>(`/api/v1/octx/transfers/${transferId}`, {
+      method: "DELETE",
+    }),
+  octxArtifactUrl: (transferId: string) =>
+    `${API_BASE}/api/v1/octx/transfers/${transferId}/artifact`,
+  downloadOctxArtifact: async (transferId: string): Promise<Blob> => {
+    const token = getToken();
+    const res = await fetch(
+      `${API_BASE}/api/v1/octx/transfers/${transferId}/artifact`,
+      {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          "Accept-Language": readClientLocale(),
+        },
+      },
+    );
+    if (!res.ok) {
+      let code = "download_failed";
+      let message = res.statusText || clientErrorMessage("requestFailed");
+      try {
+        const body = await res.json();
+        code = body?.error?.code ?? code;
+        message = body?.error?.message ?? message;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(res.status, code, message);
+    }
+    return res.blob();
+  },
+  importOctxPackage: (file: File, transferId: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<OctxTransfer>("/api/v1/octx/imports", {
+      method: "POST",
+      body: fd,
+      headers: { "X-OCTX-Transfer-ID": transferId },
+    });
+  },
+  decideOctxImport: (
+    transferId: string,
+    body: {
+      action: OctxImportAction;
+      decision_token: string;
+      target_source_id?: string;
+      discard_local_changes?: boolean;
+    },
+  ) =>
+    request<OctxTransfer>(`/api/v1/octx/imports/${transferId}/decision`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  decideOctxExport: (
+    transferId: string,
+    body: {
+      action: "export_ready_only" | "cancel";
+      decision_token: string;
+    },
+  ) =>
+    request<OctxTransfer>(`/api/v1/octx/exports/${transferId}/decision`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };

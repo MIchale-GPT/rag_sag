@@ -1,7 +1,7 @@
 {
   "name": "sag-desktop",
   "productName": "SAG",
-  "version": "1.5.3",
+  "version": "1.6.7",
   "private": true,
   "description": "SAG desktop client for macOS and Windows",
   "author": "Zleap AI",
@@ -18,8 +18,9 @@
   },
   "scripts": {
     "clean": "node ./scripts/clean.mjs",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/*.test.mts",
     "typecheck": "tsc --noEmit",
-    "build": "npm run clean && tsc",
+    "build": "npm run clean && tsc && node ./scripts/verify-preload.mjs",
     "dev": "npm run build && node ./scripts/dev.mjs",
     "build:web": "node ./scripts/build-web.mjs",
     "build:backend": "node ./scripts/build-backend.mjs",

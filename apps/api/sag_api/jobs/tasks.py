@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,10 +23,23 @@ from sag_api.core.logging import get_logger
 from sag_api.db.models import Document, Job, Source
 from sag_api.enums import DocumentStatus, JobStatus, JobType
 from sag_api.jobs.control import JobPaused, JobYielded
+from sag_api.jobs.octx_tasks import (
+    export_octx,
+    gc_octx_installation,
+    gc_octx_transfers,
+    import_octx,
+    preflight_octx,
+)
 from sag_api.jobs.scheduling import SOURCE_MAINTENANCE
-from sag_api.parsing import prepare_document
+from sag_api.parsing import ParsePaused, prepare_document
 from sag_api.sag import EngineManager
 from sag_api.sag.dto import ProcessCheckpoint
+from sag_api.services.source_operation_service import (
+    acquire_operation_lease,
+    acquire_source_exclusive_lease,
+    acquire_source_processing_lease,
+    touch_source_revision,
+)
 
 log = get_logger("jobs")
 
@@ -47,6 +62,104 @@ _DELETE_CONTROL_STATES = {
     DocumentStatus.DELETING,
     DocumentStatus.DELETE_FAILED,
 }
+_PARSER_UPLOAD_STATES = {"uploading", "uploaded"}
+_PARSER_QUEUE_STATES = {"created", "pending", "queued", "queueing"}
+_PARSER_DONE_STATES = {"done", "success", "succeeded", "completed", "finished"}
+_PARSER_FAILED_STATES = {"failed", "failure", "error", "cancelled", "canceled", "fallback_failed"}
+_SECRET_QUERY_KEYS = re.compile(r"(?i)([?&](?:token|key|signature|credential|authorization|x-amz-[^=]+)=)[^&#\s]+")
+_BEARER_TOKEN = re.compile(r"(?i)bearer\s+\S+")
+_API_KEY = re.compile(r"(?i)\b(?:sk|ak)-[a-z0-9._-]{6,}\b")
+_URL = re.compile(r"https?://[^\s；，,]+")
+
+
+def _mineru_details(state: dict[str, Any] | None = None) -> tuple[str, str]:
+    current = state or {}
+    service = current.get("mineru_service")
+    if service == "official":
+        model = current.get("mineru_model")
+        return "official", model if model in {"vlm", "pipeline"} else "vlm"
+    if service == "302":
+        version = str(current.get("mineru_version") or "").lower()
+        # The public contract predates 302's 2.0 label. "pipeline" is the
+        # closest stable representation; importantly, it does not claim 2.5.
+        return "302", "2.5" if version in {"2.5", "v2.5"} else "pipeline"
+    return "302", "2.5"
+
+
+def _redact_parser_reason(value: object) -> str | None:
+    if value is None:
+        return None
+    message = " ".join(str(value).split())
+    if not message:
+        return None
+    message = _SECRET_QUERY_KEYS.sub(r"\1[REDACTED]", message)
+    message = _BEARER_TOKEN.sub("Bearer [REDACTED]", message)
+    message = _API_KEY.sub("[REDACTED]", message)
+    message = _URL.sub("[URL REDACTED]", message)
+    return message[:300]
+
+
+def _fallback_reason(state: dict[str, Any]) -> str | None:
+    fallback = state.get("fallback")
+    if isinstance(fallback, dict):
+        return _redact_parser_reason(fallback.get("mineru_error") or fallback.get("markitdown_error"))
+    return _redact_parser_reason(state.get("error") or state.get("message"))
+
+
+def _parser_state_values(state: dict[str, Any]) -> dict[str, str | None]:
+    raw_provider = state.get("provider")
+    provider = raw_provider if raw_provider in {"mineru", "markitdown", "original"} else None
+    raw_status = str(state.get("status") or "").lower()
+    fallback = isinstance(state.get("fallback"), dict)
+    if raw_status.startswith("fallback_") or fallback:
+        status = "failed" if raw_status == "fallback_failed" else "fallback"
+        parser_provider = "markitdown" if raw_status != "fallback_failed" else provider
+        fallback_from = "mineru"
+    elif raw_status in _PARSER_UPLOAD_STATES or state.get("upload_url") and not state.get("task_id"):
+        status = "uploading"
+        parser_provider = provider
+        fallback_from = None
+    elif raw_status in _PARSER_QUEUE_STATES or state.get("task_id") and not raw_status:
+        status = "queued"
+        parser_provider = provider
+        fallback_from = None
+    elif raw_status in _PARSER_DONE_STATES:
+        status = "done"
+        parser_provider = provider
+        fallback_from = None
+    elif raw_status in _PARSER_FAILED_STATES:
+        status = "failed"
+        parser_provider = provider
+        fallback_from = None
+    else:
+        status = "running"
+        parser_provider = provider
+        fallback_from = None
+    mineru_provider = mineru_model = None
+    if provider == "mineru" or fallback_from == "mineru":
+        mineru_provider, mineru_model = _mineru_details(state)
+    return {
+        "parser_provider": parser_provider,
+        "mineru_provider": mineru_provider,
+        "mineru_model": mineru_model,
+        "parser_status": status,
+        "fallback_from": fallback_from,
+        "fallback_reason": _fallback_reason(state) if fallback_from else None,
+    }
+
+
+def _prepared_parser_values(prepared, state: dict[str, Any] | None) -> dict[str, str | None]:  # noqa: ANN001
+    mineru_provider = mineru_model = None
+    if prepared.provider == "mineru" or prepared.fallback_from == "mineru":
+        mineru_provider, mineru_model = _mineru_details(state)
+    return {
+        "parser_provider": prepared.provider,
+        "mineru_provider": mineru_provider,
+        "mineru_model": mineru_model,
+        "parser_status": "fallback" if prepared.fallback_from else "done",
+        "fallback_from": prepared.fallback_from,
+        "fallback_reason": _redact_parser_reason(prepared.fallback_error),
+    }
 
 
 async def _yield_after_document_transition_lost(
@@ -74,9 +187,7 @@ async def _yield_after_document_transition_lost(
     raise JobPaused()
 
 
-def _classify_document_failure(
-    e: Exception, current_status: DocumentStatus
-) -> tuple[ErrorLayer, ErrorStage]:
+def _classify_document_failure(e: Exception, current_status: DocumentStatus) -> tuple[ErrorLayer, ErrorStage]:
     """推断失败的责任层与链路环节。
 
     优先信任领域异常自带的 layer/stage（LLM 分类、引擎翻译层都会填）；
@@ -89,7 +200,20 @@ def _classify_document_failure(
     return ErrorLayer.ENGINE, stage
 
 
-async def process_document(
+async def process_document(session: AsyncSession, job: Job, *, engine_manager: EngineManager, job_queue=None) -> None:
+    document = await session.get(Document, job.document_id) if job.document_id else None
+    if document is None:
+        raise NotFoundError("文档不存在")
+    async with acquire_source_processing_lease(SessionLocal, document.source_id, job.id):
+        await _process_document_unlocked(
+            session,
+            job,
+            engine_manager=engine_manager,
+            job_queue=job_queue,
+        )
+
+
+async def _process_document_unlocked(
     session: AsyncSession, job: Job, *, engine_manager: EngineManager, job_queue=None
 ) -> None:
     """解析、入库并按 chunk 并发抽取；每个 chunk 完成即保存断点。"""
@@ -135,6 +259,8 @@ async def process_document(
             return
         document.status = DocumentStatus.LOADING
         document.progress = max(document.progress, 10)
+        for field, value in _parser_state_values(state).items():
+            setattr(document, field, value)
         job.progress = document.progress / 100
         job.payload = {**(await refresh_payload()), "document_parser": state}
         await session.commit()
@@ -161,25 +287,61 @@ async def process_document(
             current_job = await control_session.get(Job, job.id)
             if current_job is None:
                 return True
-            if current_job.status == JobStatus.PAUSED or (
-                current_job.payload or {}
-            ).get("pause_requested"):
+            if current_job.status == JobStatus.PAUSED or (current_job.payload or {}).get("pause_requested"):
                 scheduler_yield_reason = None
                 return True
         if job_queue is not None and job_queue.source_maintenance_requested(source.id):
             scheduler_yield_reason = SOURCE_MAINTENANCE
             return True
+        # 信源正在被删除：请求在途处理任务尽快让路并释放处理租约，使同步删除
+        # 能在 HTTP 窗口内完成，而非被动等待解析/抽取自然结束。此处按“暂停”语义
+        # 处理（不设置 yield 原因）——文档随后会随信源级联删除。
+        if job_queue is not None and job_queue.source_stop_requested(source.id):
+            return True
         return False
+
+    async def _pause_or_yield() -> None:
+        """把当前文档落到 PAUSED 或让行，供解析/抽取两个阶段共用。"""
+        await session.refresh(document)
+        if scheduler_yield_reason == SOURCE_MAINTENANCE and document.status not in _CONTROL_TRANSITION_STATES:
+            raise JobYielded(SOURCE_MAINTENANCE)
+        if document.status in _DELETE_CONTROL_STATES:
+            raise JobPaused()
+        expected_status = document.status
+        paused = await session.execute(
+            update(Document)
+            .where(
+                Document.id == document.id,
+                Document.status == expected_status,
+            )
+            .values(status=DocumentStatus.PAUSED, error=None)
+            .execution_options(synchronize_session=False)
+        )
+        if paused.rowcount != 1:
+            await _yield_after_document_transition_lost(session, document)
+        await session.commit()
+        raise JobPaused()
 
     try:
         prepared = None
+        parser_stage = False
         if not checkpoint.chunk_ids:
-            prepared = await prepare_document(
-                document.storage_path,
-                settings,
-                state=(job.payload or {}).get("document_parser"),
-                on_state=on_parser_state,
-            )
+            parser_stage = True
+            try:
+                prepared = await prepare_document(
+                    document.storage_path,
+                    settings,
+                    state=(job.payload or {}).get("document_parser"),
+                    on_state=on_parser_state,
+                    should_pause=should_pause,
+                )
+            except ParsePaused:
+                await _pause_or_yield()
+            parser_stage = False
+            parser_state = (job.payload or {}).get("document_parser")
+            for field, value in _prepared_parser_values(prepared, parser_state).items():
+                setattr(document, field, value)
+            await session.commit()
             if prepared.fallback_from:
                 log.warning(
                     "文档解析已降级 doc=%s job=%s from=%s to=%s cached=%s error=%s",
@@ -188,7 +350,7 @@ async def process_document(
                     prepared.fallback_from,
                     prepared.provider,
                     prepared.cached,
-                    prepared.fallback_error,
+                    _redact_parser_reason(prepared.fallback_error),
                 )
         outcome = await engine_manager.process_document(
             source.sag_source_config_id,
@@ -202,40 +364,30 @@ async def process_document(
             document_title=Path(document.filename).stem.strip(),
         )
         if outcome.paused:
-            await session.refresh(document)
-            if (
-                scheduler_yield_reason == SOURCE_MAINTENANCE
-                and document.status not in _CONTROL_TRANSITION_STATES
-            ):
-                raise JobYielded(SOURCE_MAINTENANCE)
-            if document.status in _DELETE_CONTROL_STATES:
-                raise JobPaused()
-            expected_status = document.status
-            paused = await session.execute(
-                update(Document)
-                .where(
-                    Document.id == document.id,
-                    Document.status == expected_status,
-                )
-                .values(status=DocumentStatus.PAUSED, error=None)
-                .execution_options(synchronize_session=False)
-            )
-            if paused.rowcount != 1:
-                await _yield_after_document_transition_lost(session, document)
-            await session.commit()
-            raise JobPaused()
+            await _pause_or_yield()
     except (JobPaused, JobYielded):
         raise
     except Exception as e:  # noqa: BLE001 - 记录到文档后再上抛给 worker
         await session.refresh(document)
-        if (
-            document.status in _CONTROL_TRANSITION_STATES
-            or document.status == DocumentStatus.PAUSED
-        ):
+        if document.status in _CONTROL_TRANSITION_STATES or document.status == DocumentStatus.PAUSED:
             await _yield_after_document_transition_lost(session, document)
         layer, stage = _classify_document_failure(e, document.status)
         expected_status = document.status
         message = getattr(e, "message", None) or str(e)
+        public_message = message
+        parser_failure_values: dict[str, str | None] = {}
+        parser_state = (job.payload or {}).get("document_parser")
+        parser_failed = parser_stage
+        if parser_failed:
+            public_message = _redact_parser_reason(message) or "文档解析失败"
+        if (
+            parser_failed
+            and isinstance(parser_state, dict)
+            and str(parser_state.get("status") or "").lower() == "fallback_failed"
+        ):
+            parser_failure_values = _parser_state_values(parser_state)
+            parser_failure_values["parser_status"] = "failed"
+            parser_failure_values["fallback_reason"] = _redact_parser_reason(message)
         failed = await session.execute(
             update(Document)
             .where(
@@ -244,9 +396,10 @@ async def process_document(
             )
             .values(
                 status=DocumentStatus.FAILED,
-                error=message,
+                error=public_message,
                 error_layer=layer.value,
                 error_stage=stage.value,
+                **parser_failure_values,
             )
             .execution_options(synchronize_session=False)
         )
@@ -257,7 +410,7 @@ async def process_document(
             document.id,
             layer.value,
             stage.value,
-            message,
+            public_message,
         )
         await session.commit()
         raise
@@ -303,6 +456,7 @@ async def process_document(
             event_count=Source.event_count + outcome.event_count,
         )
     )
+    await touch_source_revision(session, source.id)
     await session.commit()
     log.info(
         "文档处理完成 doc=%s parser=%s cached=%s chunks=%d events=%d tokens=%d",
@@ -325,6 +479,15 @@ async def process_document(
 
 
 async def delete_document_task(
+    session: AsyncSession, job: Job, *, engine_manager: EngineManager, job_queue=None
+) -> None:
+    if not job.source_id:
+        raise NotFoundError("删除任务缺少信源")
+    async with acquire_source_exclusive_lease(SessionLocal, job.source_id, f"document-delete:{job.id}"):
+        await _delete_document_task_unlocked(session, job, engine_manager=engine_manager, job_queue=job_queue)
+
+
+async def _delete_document_task_unlocked(
     session: AsyncSession, job: Job, *, engine_manager: EngineManager, job_queue=None
 ) -> None:
     """清理已取得信源维护窗口的文档派生数据、文件和记录。"""
@@ -392,10 +555,17 @@ async def delete_document_task(
 async def reprocess_document_task(
     session: AsyncSession, job: Job, *, engine_manager: EngineManager, job_queue=None
 ) -> None:
+    if not job.source_id:
+        raise NotFoundError("重新处理任务缺少信源")
+    async with acquire_source_exclusive_lease(SessionLocal, job.source_id, f"document-reprocess:{job.id}"):
+        await _reprocess_document_task_unlocked(session, job, engine_manager=engine_manager, job_queue=job_queue)
+
+
+async def _reprocess_document_task_unlocked(
+    session: AsyncSession, job: Job, *, engine_manager: EngineManager, job_queue=None
+) -> None:
     """在信源维护窗口内清理旧派生数据，再排入普通文档处理任务。"""
-    target_document_id = job.document_id or str(
-        (job.payload or {}).get("target_document_id") or ""
-    )
+    target_document_id = job.document_id or str((job.payload or {}).get("target_document_id") or "")
     if not target_document_id:
         raise NotFoundError("重新处理任务缺少文档")
     document = await session.get(Document, target_document_id)
@@ -407,11 +577,7 @@ async def reprocess_document_task(
 
     payload = dict(job.payload or {})
     derived_source_ids = sorted(
-        {
-            value.strip()
-            for value in payload.get("derived_source_ids", [])
-            if isinstance(value, str) and value.strip()
-        }
+        {value.strip() for value in payload.get("derived_source_ids", []) if isinstance(value, str) and value.strip()}
     )
     if not payload.get("cleanup_completed"):
         for derived_source_id in derived_source_ids:
@@ -431,11 +597,7 @@ async def reprocess_document_task(
         return
 
     process_job_id = payload.get("process_job_id")
-    process_job = (
-        await session.get(Job, process_job_id)
-        if isinstance(process_job_id, str) and process_job_id
-        else None
-    )
+    process_job = await session.get(Job, process_job_id) if isinstance(process_job_id, str) and process_job_id else None
     if process_job is None:
         process_job = Job(
             type=JobType.PROCESS_DOCUMENT,
@@ -459,6 +621,17 @@ async def reprocess_document_task(
 
 
 async def sync_source(session: AsyncSession, job: Job, *, engine_manager=None, job_queue=None) -> None:
+    if not job.source_id:
+        raise NotFoundError("信源不存在")
+    async with acquire_operation_lease(
+        SessionLocal,
+        [f"source:{job.source_id}"],
+        owner=f"source-sync:{job.id}",
+    ):
+        await _sync_source_unlocked(session, job, job_queue=job_queue)
+
+
+async def _sync_source_unlocked(session: AsyncSession, job: Job, *, job_queue=None) -> None:
     """动态连接器同步：discover → fetch → 登记文档并入队处理（复用 ingest→extract 管线）。"""
     # 延迟导入避免与 jobs 包的循环依赖
     from sag_api.connectors import registry
@@ -501,9 +674,7 @@ async def sync_source(session: AsyncSession, job: Job, *, engine_manager=None, j
     log.info("同步完成 source=%s 发现=%d 抓取=%d", source.id, len(discovered), fetched)
 
 
-async def index_universe(
-    session: AsyncSession, job: Job, *, engine_manager: EngineManager, job_queue=None
-) -> None:
+async def index_universe(session: AsyncSession, job: Job, *, engine_manager: EngineManager, job_queue=None) -> None:
     """Rebuild one user's aggregate universe overview from authoritative graph data."""
     from sag_api.db.models import User
     from sag_api.services.universe_service import rebuild_universe_overview
@@ -525,4 +696,9 @@ TASK_HANDLERS: dict[JobType, TaskHandler] = {
     JobType.DELETE_DOCUMENT: delete_document_task,
     JobType.SYNC_SOURCE: sync_source,
     JobType.INDEX_UNIVERSE: index_universe,
+    JobType.OCTX_PREFLIGHT: preflight_octx,
+    JobType.OCTX_IMPORT: import_octx,
+    JobType.OCTX_EXPORT: export_octx,
+    JobType.OCTX_GC_INSTALLATION: gc_octx_installation,
+    JobType.OCTX_GC_TRANSFER: gc_octx_transfers,
 }

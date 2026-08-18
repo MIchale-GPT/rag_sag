@@ -189,9 +189,22 @@ async def test_incremental_processor_passes_chunk_settings_to_zleap(monkeypatch)
         async def load(self, config):
             seen["max_tokens"] = config.max_tokens
             seen["chunk_mode"] = config.chunk_mode
-            return SimpleNamespace(source_id="document-1", chunk_ids=[])
+            return SimpleNamespace(source_id="document-1", chunk_ids=["chunk-1"])
+
+    async def complete_headings(chunk_ids, source_config_id):
+        seen["heading_vector_chunks"] = chunk_ids
+        seen["heading_vector_source"] = source_config_id
+        return 1
+
+    async def pause_after_loading():
+        return True
 
     monkeypatch.setattr(processor_module, "DocumentLoader", FakeLoader)
+    monkeypatch.setattr(
+        processor_module,
+        "complete_loaded_chunk_heading_vectors",
+        complete_headings,
+    )
     processor = IncrementalDocumentProcessor(
         object(),
         "source-config",
@@ -205,7 +218,7 @@ async def test_incremental_processor_passes_chunk_settings_to_zleap(monkeypatch)
         "/tmp/book.md",
         checkpoint=ProcessCheckpoint(),
         on_checkpoint=lambda value: _append_checkpoint([], value),
-        should_pause=lambda: _return_false(),
+        should_pause=pause_after_loading,
     )
 
     assert seen == {
@@ -213,6 +226,8 @@ async def test_incremental_processor_passes_chunk_settings_to_zleap(monkeypatch)
         "explicit_title": "正文标题",
         "max_tokens": 1_600,
         "chunk_mode": "heading_strict",
+        "heading_vector_chunks": ["chunk-1"],
+        "heading_vector_source": "source-config",
     }
     assert outcome.source_id == "document-1"
 
@@ -612,6 +627,360 @@ async def test_extract_chunk_raises_when_sag_swallows_chunk_failure(monkeypatch)
 
     with pytest.raises(RuntimeError, match="response schema is invalid"):
         await processor._extract_chunk("chunk-1")
+
+
+@pytest.mark.asyncio
+async def test_extract_chunk_retries_event_without_entity_before_save(monkeypatch):
+    """Persisting the first invalid Event would violate the OCTX Event→Entity contract."""
+    from sag_api.sag import incremental_processor as processor_module
+    from sag_api.sag.incremental_processor import IncrementalDocumentProcessor
+
+    class FakeClient:
+        async def chat(self, messages, **kwargs):
+            return SimpleNamespace(content="{}", usage=SimpleNamespace(total_tokens=10))
+
+    class FakeExtractor:
+        created = 0
+        saved: list[str] = []
+
+        def __init__(self, **kwargs):
+            self.attempt = FakeExtractor.created
+            FakeExtractor.created += 1
+            self.client = FakeClient()
+
+        async def _get_llm_client(self):
+            return self.client
+
+        async def _save_events(self, events, config):
+            FakeExtractor.saved.extend(event.id for event in events)
+            return events
+
+        async def extract(self, config):
+            await self.client.chat([SimpleNamespace(content="knowledge")])
+            event = SimpleNamespace(
+                id=f"event-{self.attempt}",
+                content="Event body",
+                event_associations=[] if self.attempt == 0 else [object()],
+                children=[],
+            )
+            await self._save_events([event], config)
+            return [event]
+
+    monkeypatch.setattr(processor_module, "EventExtractor", FakeExtractor)
+    engine = SimpleNamespace(
+        _extractor=SimpleNamespace(prompt_manager=object(), model_config={})
+    )
+    processor = IncrementalDocumentProcessor(
+        engine,
+        "source-config",
+        max_concurrency=1,
+        event_entity_attempts=2,
+    )
+
+    event_ids, token_usage = await processor._extract_chunk("chunk-1")
+
+    assert event_ids == ["event-1"]
+    assert token_usage == 20
+    assert FakeExtractor.saved == ["event-1"]
+
+
+@pytest.mark.asyncio
+async def test_extract_chunk_retries_event_without_content_before_save(monkeypatch):
+    """An Event with entities but no body must never cross the persistence boundary."""
+    from sag_api.sag import incremental_processor as processor_module
+    from sag_api.sag.incremental_processor import IncrementalDocumentProcessor
+
+    class FakeClient:
+        async def chat(self, messages, **kwargs):
+            return SimpleNamespace(content="{}", usage=SimpleNamespace(total_tokens=10))
+
+    class FakeExtractor:
+        created = 0
+        saved: list[str] = []
+
+        def __init__(self, **kwargs):
+            self.attempt = FakeExtractor.created
+            FakeExtractor.created += 1
+            self.client = FakeClient()
+
+        async def _get_llm_client(self):
+            return self.client
+
+        async def _save_events(self, events, config):
+            FakeExtractor.saved.extend(event.id for event in events)
+            return events
+
+        async def extract(self, config):
+            await self.client.chat([SimpleNamespace(content="knowledge")])
+            event = SimpleNamespace(
+                id=f"event-{self.attempt}",
+                content="   " if self.attempt == 0 else "Event body",
+                event_associations=[object()],
+                children=[],
+            )
+            await self._save_events([event], config)
+            return [event]
+
+    monkeypatch.setattr(processor_module, "EventExtractor", FakeExtractor)
+    engine = SimpleNamespace(
+        _extractor=SimpleNamespace(prompt_manager=object(), model_config={})
+    )
+    processor = IncrementalDocumentProcessor(
+        engine,
+        "source-config",
+        max_concurrency=1,
+        event_entity_attempts=2,
+    )
+
+    event_ids, token_usage = await processor._extract_chunk("chunk-1")
+
+    assert event_ids == ["event-1"]
+    assert token_usage == 20
+    assert FakeExtractor.saved == ["event-1"]
+
+
+@pytest.mark.asyncio
+async def test_extract_chunk_becomes_eventless_after_entity_contract_exhaustion(
+    monkeypatch,
+):
+    """Repeated invalid Events must yield an eventless Chunk, never an incomplete graph."""
+    from sag_api.sag import incremental_processor as processor_module
+    from sag_api.sag.incremental_processor import IncrementalDocumentProcessor
+
+    class FakeClient:
+        async def chat(self, messages, **kwargs):
+            return SimpleNamespace(content="{}", usage=SimpleNamespace(total_tokens=7))
+
+    class FakeExtractor:
+        created = 0
+        save_calls = 0
+
+        def __init__(self, **kwargs):
+            self.attempt = FakeExtractor.created
+            FakeExtractor.created += 1
+            self.client = FakeClient()
+
+        async def _get_llm_client(self):
+            return self.client
+
+        async def _save_events(self, events, config):
+            FakeExtractor.save_calls += 1
+            return events
+
+        async def extract(self, config):
+            await self.client.chat([SimpleNamespace(content="knowledge")])
+            event = SimpleNamespace(
+                id=f"event-{self.attempt}",
+                event_associations=[],
+                children=[],
+            )
+            await self._save_events([event], config)
+            return [event]
+
+    monkeypatch.setattr(processor_module, "EventExtractor", FakeExtractor)
+    engine = SimpleNamespace(
+        _extractor=SimpleNamespace(prompt_manager=object(), model_config={})
+    )
+    processor = IncrementalDocumentProcessor(
+        engine,
+        "source-config",
+        max_concurrency=1,
+        event_entity_attempts=2,
+    )
+
+    assert await processor._extract_chunk("chunk-1") == ([], 14)
+    assert FakeExtractor.created == 2
+    assert FakeExtractor.save_calls == 0
+
+
+def test_event_entity_schema_is_strengthened_without_mutating_prompt_schema():
+    """Mutating the shared prompt schema would leak one request's policy into others."""
+    from sag_api.sag.incremental_processor import _strengthen_event_entity_schema
+
+    original = {
+        "definitions": {
+            "event": {
+                "type": "object",
+                "required": ["title"],
+                "properties": {
+                    "entities": {"type": "array", "items": {}},
+                    "content": {"type": "string"},
+                },
+            }
+        }
+    }
+
+    strengthened = _strengthen_event_entity_schema(original)
+
+    assert original["definitions"]["event"]["required"] == ["title"]
+    event = strengthened["definitions"]["event"]
+    assert event["required"] == ["title", "entities", "content"]
+    assert event["properties"]["entities"]["minItems"] == 1
+    assert event["properties"]["content"]["minLength"] == 1
+
+
+def test_strengthen_event_entity_schema_passes_null_schema_through():
+    """The DeepSeek json_object compat path in ``sag.compat`` calls
+    ``chat_with_schema(response_schema=None, response_format={"type":"json_object"})``.
+    ``strengthened_chat_with_schema`` forwards that ``None`` into the strengthener,
+    where ``dict(None)`` used to raise ``'NoneType' object is not iterable`` and crash
+    the whole chunk extraction (``Chunk提取失败: 提取失败: 'NoneType' object is not iterable``)
+    before the LLM was ever called.  A null schema must strengthen to a no-op."""
+    from sag_api.sag.incremental_processor import _strengthen_event_entity_schema
+
+    assert _strengthen_event_entity_schema(None) is None
+    # Any other non-mapping value is likewise returned unchanged, never coerced.
+    assert _strengthen_event_entity_schema("not-a-schema") == "not-a-schema"
+
+
+@pytest.mark.asyncio
+async def test_strengthened_wrapper_forwards_null_response_schema():
+    """End-to-end guard: the schema-strengthening wrapper installed on the LLM
+    client must pass ``response_schema=None`` straight through to the underlying
+    ``chat_with_schema`` (json_object mode) instead of crashing in the strengthener."""
+    from sag_api.sag.incremental_processor import _strengthen_event_entity_schema
+
+    seen: dict[str, object] = {}
+
+    async def original_chat_with_schema(messages, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(content="{}")
+
+    # Mirror the wrapper installed in IncrementalDocumentProcessor.
+    async def strengthened_chat_with_schema(
+        *args,
+        _original_chat_with_schema=original_chat_with_schema,
+        **kwargs,
+    ):
+        call_args = list(args)
+        if "response_schema" in kwargs:
+            kwargs = {
+                **kwargs,
+                "response_schema": _strengthen_event_entity_schema(kwargs["response_schema"]),
+            }
+        elif len(call_args) >= 2:
+            call_args[1] = _strengthen_event_entity_schema(call_args[1])
+        return await _original_chat_with_schema(*call_args, **kwargs)
+
+    await strengthened_chat_with_schema(
+        [{"role": "user", "content": "x"}],
+        response_schema=None,
+        response_format={"type": "json_object"},
+    )
+    assert seen["response_schema"] is None
+    assert seen["response_format"] == {"type": "json_object"}
+
+
+def test_event_entity_attempt_setting_is_bounded():
+    """An unbounded contract retry would amplify LLM cost and stall document jobs."""
+    from pydantic import ValidationError
+
+    from sag_api.core.config import Settings
+
+    assert Settings(_env_file=None).document_event_entity_attempts == 2
+    assert Settings(
+        _env_file=None, document_event_entity_attempts=3
+    ).document_event_entity_attempts == 3
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, document_event_entity_attempts=0)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, document_event_entity_attempts=4)
+
+
+@pytest.mark.asyncio
+async def test_extract_chunk_passes_strengthened_schema_to_llm(monkeypatch):
+    """A weak provider path must receive the strongest schema SAG can express."""
+    from sag_api.sag import incremental_processor as processor_module
+    from sag_api.sag.incremental_processor import IncrementalDocumentProcessor
+
+    class FakeClient:
+        async def chat(self, messages, **kwargs):
+            return SimpleNamespace(content="{}", usage=SimpleNamespace(total_tokens=3))
+
+        async def chat_with_schema(self, messages, *, response_schema):
+            event = response_schema["definitions"]["event"]
+            assert "entities" in event["required"]
+            assert "content" in event["required"]
+            assert event["properties"]["entities"]["minItems"] == 1
+            assert event["properties"]["content"]["minLength"] == 1
+            return await self.chat(messages)
+
+    class FakeExtractor:
+        def __init__(self, **kwargs):
+            self.client = FakeClient()
+
+        async def _get_llm_client(self):
+            return self.client
+
+        async def _save_events(self, events, config):
+            return events
+
+        async def extract(self, config):
+            schema = {
+                "definitions": {
+                        "event": {
+                            "required": ["title"],
+                            "properties": {
+                                "entities": {"type": "array"},
+                                "content": {"type": "string"},
+                            },
+                        }
+                }
+            }
+            await self.client.chat_with_schema([], response_schema=schema)
+            event = SimpleNamespace(
+                id="event-1",
+                content="Event body",
+                event_associations=[object()],
+                children=[],
+            )
+            await self._save_events([event], config)
+            return [event]
+
+    monkeypatch.setattr(processor_module, "EventExtractor", FakeExtractor)
+    processor = IncrementalDocumentProcessor(
+        SimpleNamespace(
+            _extractor=SimpleNamespace(prompt_manager=object(), model_config={})
+        ),
+        "source-config",
+        max_concurrency=1,
+    )
+
+    assert await processor._extract_chunk("chunk-1") == (["event-1"], 3)
+
+
+@pytest.mark.asyncio
+async def test_entity_contract_exhaustion_is_persisted_in_checkpoint(monkeypatch):
+    """Without durable diagnostics, an eventless quality fallback is indistinguishable from no Event."""
+    from sag_api.sag.dto import ProcessCheckpoint
+    from sag_api.sag.incremental_processor import IncrementalDocumentProcessor
+
+    processor = IncrementalDocumentProcessor(
+        SimpleNamespace(_extractor=object()),
+        "source-config",
+        max_concurrency=1,
+    )
+    processor._event_entity_rejection_counts = {"chunk-1": 2}
+
+    async def exhausted(_chunk_id):
+        return [], 14
+
+    async def publish(checkpoint):
+        snapshots.append(checkpoint)
+
+    snapshots: list[ProcessCheckpoint] = []
+    monkeypatch.setattr(processor, "_extract_chunk", exhausted)
+    await processor._extract_remaining(
+        ["chunk-1"],
+        current=ProcessCheckpoint(chunk_ids=["chunk-1"]),
+        on_checkpoint=publish,
+        should_pause=_return_false,
+    )
+
+    quality = snapshots[-1].event_entity_quality
+    assert quality.rejected_attempts == 2
+    assert quality.eventless_after_contract == ["chunk-1"]
+    assert quality.reason_counts == {"entities_missing": 2}
 
 
 async def _return_false():
@@ -1105,6 +1474,12 @@ async def test_reprocess_ready_document_replaces_all_previous_derived_data():
             event_count=2,
             token_usage=500,
             sag_source_id="engine-latest",
+            parser_provider="mineru",
+            mineru_provider="official",
+            mineru_model="pipeline",
+            parser_status="done",
+            fallback_from="mineru",
+            fallback_reason="previous fallback",
         )
         other = Document(
             source_id=source.id,
@@ -1154,6 +1529,10 @@ async def test_reprocess_ready_document_replaces_all_previous_derived_data():
         assert document.progress == 0
         assert document.chunk_count == 0 and document.event_count == 0
         assert document.token_usage == 0 and document.sag_source_id is None
+        assert document.parser_provider is None
+        assert document.mineru_provider is None and document.mineru_model is None
+        assert document.parser_status is None
+        assert document.fallback_from is None and document.fallback_reason is None
         assert source.document_count == 2
         assert source.chunk_count == 4 and source.event_count == 5
         assert job.type == JobType.REPROCESS_DOCUMENT

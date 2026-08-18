@@ -14,6 +14,7 @@ from sag_api.db.models import Document, Job, Source
 from sag_api.enums import DocumentStatus, JobStatus, JobType
 from sag_api.jobs import JobQueue
 from sag_api.jobs.scheduling import DELETE_PRIORITY, RESUME_PRIORITY, set_scheduler
+from sag_api.services.source_operation_service import touch_source_revision
 
 
 async def _enqueue_persisted_job(job_queue: JobQueue, job_id: str) -> None:
@@ -30,9 +31,8 @@ async def list_documents(session: AsyncSession, source_id: str) -> list[Document
         select(Document)
         .where(
             Document.source_id == source_id,
-            Document.status.not_in(
-                [DocumentStatus.DELETING, DocumentStatus.DELETE_FAILED]
-            ),
+            Document.is_active.is_(True),
+            Document.status.not_in([DocumentStatus.DELETING, DocumentStatus.DELETE_FAILED]),
         )
         .order_by(Document.created_at.desc())
     )
@@ -41,7 +41,7 @@ async def list_documents(session: AsyncSession, source_id: str) -> list[Document
 
 async def get_document(session: AsyncSession, source: Source, document_id: str) -> Document:
     doc = await session.get(Document, document_id)
-    if doc is None or doc.source_id != source.id:
+    if doc is None or doc.source_id != source.id or not doc.is_active:
         raise NotFoundError("文档不存在")
     return doc
 
@@ -89,9 +89,7 @@ async def create_document_from_upload(
         status=DocumentStatus.PENDING,
     )
     session.add(document)
-    await session.execute(
-        update(Source).where(Source.id == source.id).values(document_count=Source.document_count + 1)
-    )
+    await session.execute(update(Source).where(Source.id == source.id).values(document_count=Source.document_count + 1))
     job = Job(
         type=JobType.PROCESS_DOCUMENT,
         source_id=source.id,
@@ -99,6 +97,7 @@ async def create_document_from_upload(
         status=JobStatus.QUEUED,
     )
     session.add(job)
+    await touch_source_revision(session, source.id)
     await session.commit()
     await session.refresh(document)
     await session.refresh(job)
@@ -160,9 +159,7 @@ async def reprocess_document(
     document = await get_document(session, source, document_id)
     if document.status in {DocumentStatus.DELETING, DocumentStatus.DELETE_FAILED}:
         raise ConflictError("文档正在删除或删除失败，无法重新处理")
-    latest = await session.scalar(
-        select(Job).where(Job.document_id == document.id).order_by(Job.created_at.desc())
-    )
+    latest = await session.scalar(select(Job).where(Job.document_id == document.id).order_by(Job.created_at.desc()))
     if latest is not None and latest.status in {
         JobStatus.QUEUED,
         JobStatus.RUNNING,
@@ -171,9 +168,7 @@ async def reprocess_document(
         return latest
     restart_from_scratch = document.status == DocumentStatus.READY
     retrying_cleanup = bool(
-        latest is not None
-        and latest.type == JobType.REPROCESS_DOCUMENT
-        and latest.status == JobStatus.FAILED
+        latest is not None and latest.type == JobType.REPROCESS_DOCUMENT and latest.status == JobStatus.FAILED
     )
     requires_maintenance = restart_from_scratch or retrying_cleanup
     original_status = document.status
@@ -185,11 +180,7 @@ async def reprocess_document(
                 document.sag_source_id,
                 *[
                     _checkpoint_source_id(candidate.payload)
-                    for candidate in (
-                        await session.scalars(
-                            select(Job).where(Job.document_id == document.id)
-                        )
-                    ).all()
+                    for candidate in (await session.scalars(select(Job).where(Job.document_id == document.id))).all()
                 ],
             ]
             if value
@@ -206,6 +197,12 @@ async def reprocess_document(
             event_count=0,
             token_usage=0,
             sag_source_id=None,
+            parser_provider=None,
+            mineru_provider=None,
+            mineru_model=None,
+            parser_status=None,
+            fallback_from=None,
+            fallback_reason=None,
         )
     claimed = await session.execute(
         update(Document)
@@ -219,12 +216,8 @@ async def reprocess_document(
             select(Job)
             .where(
                 Job.document_id == document_id,
-                Job.type.in_(
-                    [JobType.PROCESS_DOCUMENT, JobType.REPROCESS_DOCUMENT]
-                ),
-                Job.status.in_(
-                    [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.PAUSED]
-                ),
+                Job.type.in_([JobType.PROCESS_DOCUMENT, JobType.REPROCESS_DOCUMENT]),
+                Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.PAUSED]),
             )
             .order_by(Job.created_at.desc(), Job.id.desc())
             .limit(1)
@@ -249,11 +242,7 @@ async def reprocess_document(
     elif retrying_cleanup:
         payload = set_scheduler(payload, priority=DELETE_PRIORITY, blocked_reason=None)
     job = Job(
-        type=(
-            JobType.REPROCESS_DOCUMENT
-            if requires_maintenance
-            else JobType.PROCESS_DOCUMENT
-        ),
+        type=(JobType.REPROCESS_DOCUMENT if requires_maintenance else JobType.PROCESS_DOCUMENT),
         source_id=source.id,
         document_id=document.id,
         status=JobStatus.QUEUED,
@@ -261,6 +250,7 @@ async def reprocess_document(
         payload=payload,
     )
     session.add(job)
+    await touch_source_revision(session, source.id)
     await session.commit()
     await session.refresh(job)
     if requires_maintenance:
@@ -281,56 +271,70 @@ async def _document_derived_source_ids(
 ) -> set[str]:
     """Collect every engine article id ever associated with one document."""
     values = {document.sag_source_id} if document.sag_source_id else set()
-    jobs = (
-        await session.scalars(select(Job).where(Job.document_id == document.id))
-    ).all()
+    jobs = (await session.scalars(select(Job).where(Job.document_id == document.id))).all()
     for candidate in jobs:
         payload = candidate.payload or {}
         checkpoint_id = _checkpoint_source_id(payload)
         if checkpoint_id:
             values.add(checkpoint_id)
         values.update(
-            value.strip()
-            for value in payload.get("derived_source_ids", [])
-            if isinstance(value, str) and value.strip()
+            value.strip() for value in payload.get("derived_source_ids", []) if isinstance(value, str) and value.strip()
         )
     return values
 
 
-async def _refresh_source_counts(session: AsyncSession, source: Source) -> None:
-    document_count, chunk_count, event_count = (
-        await session.execute(
-            select(
-                func.count(Document.id),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (Document.status == DocumentStatus.READY, Document.chunk_count),
-                            else_=0,
-                        )
-                    ),
-                    0,
+def _source_document_filter(source_id: str):
+    return (
+        Document.source_id == source_id,
+        Document.is_active.is_(True),
+        Document.status.not_in([DocumentStatus.DELETING, DocumentStatus.DELETE_FAILED]),
+    )
+
+
+def _source_sum_clause(source_id: str, column):
+    """仅统计 READY 文档的分块/事件列求和。"""
+    return (
+        select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (Document.status == DocumentStatus.READY, column),
+                        else_=0,
+                    )
                 ),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (Document.status == DocumentStatus.READY, Document.event_count),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ),
-            ).where(
-                Document.source_id == source.id,
-                Document.status.not_in(
-                    [DocumentStatus.DELETING, DocumentStatus.DELETE_FAILED]
-                ),
+                0,
             )
         )
-    ).one()
-    source.document_count = int(document_count)
-    source.chunk_count = int(chunk_count)
-    source.event_count = int(event_count)
+        .where(*_source_document_filter(source_id))
+        .scalar_subquery()
+    )
+
+
+async def _refresh_source_counts(session: AsyncSession, source: Source) -> None:
+    """原子重算信源聚合计数。
+
+    删除任务与文档级变更（上传/删除等）可并发提交；用单条 UPDATE 在数据库
+    层串行化计数写入，避免「先 SELECT 后赋值」在两者交错时丢失计数。
+    """
+    document_count = (
+        select(func.count(Document.id))
+        .where(*_source_document_filter(source.id))
+        .scalar_subquery()
+    )
+    await session.execute(
+        update(Source)
+        .where(Source.id == source.id)
+        .values(
+            document_count=document_count,
+            chunk_count=_source_sum_clause(source.id, Document.chunk_count),
+            event_count=_source_sum_clause(source.id, Document.event_count),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    await session.refresh(
+        source,
+        attribute_names=["document_count", "chunk_count", "event_count"],
+    )
 
 
 async def _commit_document_job_transition(
@@ -504,9 +508,7 @@ async def resume_document(
         priority=RESUME_PRIORITY,
         blocked_reason=None,
     )
-    resumed_status = (
-        DocumentStatus.EXTRACTING if payload.get("process_checkpoint") else DocumentStatus.PENDING
-    )
+    resumed_status = DocumentStatus.EXTRACTING if payload.get("process_checkpoint") else DocumentStatus.PENDING
     if not await _commit_document_job_transition(
         session,
         document,
@@ -630,8 +632,7 @@ async def delete_document(
                     (
                         candidate
                         for candidate in completed_jobs
-                        if (candidate.payload or {}).get("target_document_id")
-                        == target_document_id
+                        if (candidate.payload or {}).get("target_document_id") == target_document_id
                     ),
                     None,
                 )
@@ -680,8 +681,7 @@ async def delete_document(
                 (
                     candidate
                     for candidate in completed_jobs
-                    if (candidate.payload or {}).get("target_document_id")
-                    == target_document_id
+                    if (candidate.payload or {}).get("target_document_id") == target_document_id
                 ),
                 None,
             )
@@ -707,6 +707,7 @@ async def delete_document(
         await session.delete(document)
         await session.flush()
         await _refresh_source_counts(session, source)
+        await touch_source_revision(session, source.id)
         await session.commit()
         await session.refresh(completed)
         if path:
@@ -778,6 +779,7 @@ async def delete_document(
     )
     session.add(delete_job)
     await _refresh_source_counts(session, source)
+    await touch_source_revision(session, source.id)
     await session.commit()
     await session.refresh(delete_job)
     if job_queue is not None:

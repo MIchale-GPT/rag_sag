@@ -23,11 +23,13 @@ def is_runtime_submodule(name):
 
 
 for package in (
+    "jieba",
     "lancedb",
     "magika",
     "markitdown",
     "tiktoken",
     "tokenizers",
+    "octx",
     "zleap",
 ):
     package_datas, package_binaries, package_imports = collect_all(
@@ -66,12 +68,14 @@ for package in (
     hiddenimports += collect_submodules(package)
 
 for package in (
+    "jieba-py",
     "sag-api",
     "zleap-sag",
     "lancedb",
     "litellm",
     "markitdown",
     "mcp",
+    "octx",
 ):
     datas += copy_metadata(package, recursive=True)
 

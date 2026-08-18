@@ -30,7 +30,12 @@ export function UploadZone({
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [drag, setDrag] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
-  const [progress, setProgress] = React.useState<{ name: string; pct: number; idx: number; total: number } | null>(null);
+  const [progress, setProgress] = React.useState<{
+    name: string;
+    pct: number;
+    idx: number;
+    total: number;
+  } | null>(null);
 
   const extOf = (name: string) => {
     const i = name.lastIndexOf(".");
@@ -49,11 +54,19 @@ export function UploadZone({
         toast.error(t("unsupportedType", { name: file.name }));
         continue;
       }
+      // 客户端先行拦截：超过单文件上限即时提示，避免超大文件白传后被服务端拒绝
+      if (file.size > maxMb * 1024 * 1024) {
+        toast.error(t("fileTooLarge", { name: file.name, maxMb }));
+        continue;
+      }
       try {
         const idx = ok + 1;
         setProgress({ name: file.name, pct: 0, idx, total: files.length });
-        const doc = await api.uploadDocumentWithProgress(sourceId, file, (pct) =>
-          setProgress((p) => (p ? { ...p, pct } : p)),
+        // 删除清理期间的文档会直接排队显示为“待处理”，上传请求本身不再等待。
+        const { document: doc } = await api.uploadDocumentWithProgress(
+          sourceId,
+          file,
+          (pct) => setProgress((p) => (p ? { ...p, pct } : p)),
         );
         ok += 1;
         getDiagnosticsStore().record("knowledge.upload", {

@@ -1,4 +1,5 @@
 import { closeSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { release as osRelease, version as osVersion } from "node:os";
 import path from "node:path";
 
 import {
@@ -128,6 +129,8 @@ function readLogTail(filePath: string, sizeBytes: number): {
 function registerIpc(): void {
   ipcMain.removeHandler(DESKTOP_CHANNELS.appInfo);
   ipcMain.removeHandler(DESKTOP_CHANNELS.checkForUpdates);
+  ipcMain.removeHandler(DESKTOP_CHANNELS.getUpdateState);
+  ipcMain.removeHandler(DESKTOP_CHANNELS.installUpdate);
   ipcMain.removeHandler(DESKTOP_CHANNELS.diagnosticsInfo);
   ipcMain.handle(DESKTOP_CHANNELS.appInfo, (event) => {
     if (!isTrustedSender(event)) throw new Error("Untrusted IPC sender");
@@ -136,6 +139,14 @@ function registerIpc(): void {
   ipcMain.handle(DESKTOP_CHANNELS.checkForUpdates, async (event) => {
     if (!isTrustedSender(event)) throw new Error("Untrusted IPC sender");
     return updater?.check() ?? { supported: false };
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.getUpdateState, (event) => {
+    if (!isTrustedSender(event)) throw new Error("Untrusted IPC sender");
+    return updater?.getState() ?? { status: "idle" };
+  });
+  ipcMain.handle(DESKTOP_CHANNELS.installUpdate, (event) => {
+    if (!isTrustedSender(event)) throw new Error("Untrusted IPC sender");
+    return updater?.install() ?? { started: false };
   });
   ipcMain.handle(DESKTOP_CHANNELS.diagnosticsInfo, (event) => {
     if (!isTrustedSender(event)) throw new Error("Untrusted IPC sender");
@@ -167,6 +178,9 @@ function registerIpc(): void {
       version: app.getVersion(),
       platform: process.platform,
       arch: process.arch,
+      osRelease: osRelease(),
+      osVersion: osVersion(),
+      packaged: app.isPackaged,
       electron: process.versions.electron ?? "unknown",
       chrome: process.versions.chrome ?? "unknown",
       node: process.versions.node ?? "unknown",
