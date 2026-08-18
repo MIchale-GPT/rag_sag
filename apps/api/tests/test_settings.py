@@ -5,6 +5,7 @@
 """
 
 import httpx
+import os
 import pytest
 
 from sag_api.core.config import Settings, settings
@@ -22,10 +23,17 @@ _RESTORE = (
     "search_top_k",
     "sag_language",
     "llm_api_key",
+    "embedding_model",
+    "embedding_base_url",
+    "embedding_api_key",
+    "embedding_dimensions",
     "document_parser",
     "mineru_base_url",
     "mineru_api_key",
     "mineru_version",
+    "ocr_base_url",
+    "ocr_api_key",
+    "ocr_model",
     "timezone",
     "document_extract_concurrency",
 )
@@ -171,6 +179,30 @@ async def test_model_config_crud_masking_and_test(monkeypatch: pytest.MonkeyPatc
     from sag_api.main import app
 
     snapshot = {k: getattr(settings, k) for k in _RESTORE}
+    # conftest 已强制离线（LLM/Embedding/MinerU key 为空）；本地 .env 可能
+    # 额外配置了解析器/OCR/模型，这里只对这些字段回到“未配置/代码默认”
+    # 的确定性语义，不动 conftest 设置的数据目录等变量。
+    for name in (
+        "SAG_DOCUMENT_PARSER",
+        "SAG_OCR_BASE_URL",
+        "SAG_OCR_API_KEY",
+        "SAG_OCR_MODEL",
+        "SAG_LLM_MODEL",
+        "SAG_EMBEDDING_MODEL",
+        "SAG_EMBEDDING_BASE_URL",
+        "SAG_EMBEDDING_DIMENSIONS",
+        "SAG_DOCUMENT_EXTRACT_CONCURRENCY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    settings.document_parser = "auto"
+    settings.ocr_base_url = None
+    settings.ocr_api_key = None
+    settings.ocr_model = "qwen3.5-4b"
+    settings.llm_model = "qwen3.6-flash"
+    settings.embedding_model = "bge-large-en-v1.5"
+    settings.embedding_dimensions = None
+    settings.document_extract_concurrency = 30
+    settings.llm_timeout_ms = 60_000
     transport = httpx.ASGITransport(app=app)
     try:
         async with app.router.lifespan_context(app):

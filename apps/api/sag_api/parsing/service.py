@@ -19,6 +19,7 @@ from sag_api.core.errors import (
     ValidationError,
 )
 from sag_api.parsing.mineru import MinerUClient
+from sag_api.parsing.ocr import OcrClient
 from sag_api.parsing.text import TextDecodingError, is_plain_text_path, read_text_file
 
 ParseStateCallback = Callable[[dict[str, Any]], Awaitable[None]]
@@ -28,9 +29,9 @@ _PARSE_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValue
 @dataclass(frozen=True, slots=True)
 class PreparedDocument:
     path: str
-    provider: Literal["original", "markitdown", "mineru"]
+    provider: Literal["original", "markitdown", "mineru", "ocr"]
     cached: bool = False
-    fallback_from: Literal["mineru"] | None = None
+    fallback_from: Literal["mineru", "ocr"] | None = None
     fallback_error: str | None = None
 
 
@@ -47,7 +48,10 @@ async def prepare_document(
         return PreparedDocument(path=path, provider="original")
 
     use_mineru = suffix == ".pdf" and settings.effective_document_parser == "mineru"
-    provider: Literal["markitdown", "mineru"] = "mineru" if use_mineru else "markitdown"
+    use_ocr = suffix in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"} and settings.effective_document_parser == "ocr"
+    provider: Literal["markitdown", "mineru", "ocr"] = (
+        "mineru" if use_mineru else "ocr" if use_ocr else "markitdown"
+    )
     signature = _signature(provider, settings)
     cache_path = f"{path}.parsed.{signature}.md"
     if _is_cached(cache_path):
@@ -77,7 +81,7 @@ async def prepare_document(
 async def _prepare_and_cache(
     path: str,
     cache_path: str,
-    provider: Literal["markitdown", "mineru"],
+    provider: Literal["markitdown", "mineru", "ocr"],
     signature: str,
     settings: Settings,
     *,
@@ -86,6 +90,8 @@ async def _prepare_and_cache(
 ) -> PreparedDocument:
     parser_state = _compatible_state(state, provider, signature, settings)
     current_state = dict(parser_state)
+    fallback_from: Literal["ocr"] | None = None
+    fallback_error: str | None = None
 
     async def track_state(next_state: dict[str, Any]) -> None:
         nonlocal current_state
@@ -145,6 +151,17 @@ async def _prepare_and_cache(
                 mineru_error_code=mineru_error.code,
                 on_state=track_state,
             )
+    elif provider == "ocr":
+        try:
+            markdown = await OcrClient(settings).parse(
+                path, state=parser_state, on_state=track_state
+            )
+        except ApiError as ocr_error:
+            # OCR 失败回退本地 MarkItDown；结果写入 OCR 缓存路径，
+            # 避免后续重新处理时每次都重试失败的 OCR。
+            markdown = await _convert_with_markitdown(path)
+            fallback_from = "ocr"
+            fallback_error = _exception_message(ocr_error)
     else:
         markdown = (
             await asyncio.to_thread(_convert_plain_text, path)
@@ -163,7 +180,12 @@ async def _prepare_and_cache(
                 "cache_path": cache_path,
             }
         )
-    return PreparedDocument(path=cache_path, provider=provider)
+    return PreparedDocument(
+        path=cache_path,
+        provider=provider,
+        fallback_from=fallback_from,
+        fallback_error=fallback_error,
+    )
 
 
 async def _prepare_markitdown_fallback(
@@ -340,6 +362,8 @@ def parsed_sidecar_paths(path: str) -> list[str]:
 def _signature(provider: str, settings: Settings) -> str:
     if provider == "mineru":
         return f"mineru-{settings.mineru_version}-{settings.mineru_parse_method}"
+    if provider == "ocr":
+        return f"ocr-{settings.ocr_model}"
     return "markitdown"
 
 

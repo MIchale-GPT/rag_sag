@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     environment: Literal["dev", "prod"] = "dev"
     debug: bool = True
     secret_key: str = "dev-insecure-secret-change-me-in-production-0123456789"
-    access_token_expire_minutes: int = 60 * 24 * 7  # 7 天
+    access_token_expire_minutes: int = 0  # 0 = 永不过期（不写入 exp）；>0 为有效分钟数
     # 业务展示时区；数据库与 API 时间戳始终使用 UTC。
     timezone: str = "Asia/Shanghai"
     # NoDecode 让逗号分隔值先进入下方 validator，避免 settings 源强制按 JSON 解码。
@@ -86,6 +86,13 @@ class Settings(BaseSettings):
         ".htm",
         ".json",
         ".epub",
+        # 图片：多模态 OCR 解析（需 effective_document_parser=ocr/auto）
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".bmp",
+        ".gif",
     }
 
     # ── zleap-sag 后端选择 ─────────────────────────────────────────────
@@ -125,8 +132,8 @@ class Settings(BaseSettings):
     embedding_dimensions: int | None = None
 
     # ── 文档解析（进入 zleap-sag 前统一转为 Markdown）─────────────────
-    # auto：PDF 优先 MinerU，未配置或 MinerU 失败时回退本地 MarkItDown。
-    document_parser: Literal["auto", "markitdown", "mineru"] = "auto"
+    # auto：PDF 优先 MinerU → 本地/代理 OCR → 本地 MarkItDown。
+    document_parser: Literal["auto", "markitdown", "mineru", "ocr"] = "auto"
     mineru_base_url: str | None = "https://api.302ai.cn"
     mineru_api_key: str | None = None
     mineru_version: Literal["2.0", "2.5"] = "2.5"
@@ -135,6 +142,17 @@ class Settings(BaseSettings):
     mineru_poll_interval: float = 2.0
     mineru_poll_timeout: float = 300.0
     mineru_result_max_mb: int = 100
+
+    # ── 本地/代理多模态 OCR（OpenAI 兼容视觉模型，如 qwen3.5-4b）────────
+    # PDF → 逐页渲染 PNG → 调 chat/completions 图片接口 → Markdown。
+    ocr_base_url: str | None = None
+    ocr_api_key: str | None = None
+    ocr_model: str = "qwen3.5-4b"
+    ocr_max_pages: int = Field(default=30, ge=1, le=1000)
+    ocr_page_scale: float = Field(default=2.0, ge=1.0, le=4.0)
+    ocr_concurrency: int = Field(default=2, ge=1, le=8)
+    ocr_request_timeout: float = Field(default=120.0, ge=10.0, le=600.0)
+    ocr_max_tokens: int = Field(default=4096, ge=256, le=8192)
 
     # ── 检索默认 ────────────────────────────────────────────────────────
     # multi_es_fast：默认策略。相关率平均比 vector 高 ~14 个百分点；
@@ -239,11 +257,24 @@ class Settings(BaseSettings):
         return bool(self.mineru_base_url and self.mineru_api_key)
 
     @property
-    def effective_document_parser(self) -> Literal["markitdown", "mineru"]:
+    def ocr_configured(self) -> bool:
+        """本地/代理多模态 OCR 是否具备可调用的端点与密钥。"""
+        return bool(self.ocr_base_url and self.ocr_api_key)
+
+    @property
+    def effective_document_parser(self) -> Literal["markitdown", "mineru", "ocr"]:
         """当前自动解析偏好；具体文件仍由解析服务按格式路由。"""
         if self.document_parser == "markitdown":
             return "markitdown"
-        return "mineru" if self.mineru_configured else "markitdown"
+        if self.document_parser == "mineru":
+            return "mineru" if self.mineru_configured else "markitdown"
+        if self.document_parser == "ocr":
+            return "ocr" if self.ocr_configured else "markitdown"
+        if self.mineru_configured:
+            return "mineru"
+        if self.ocr_configured:
+            return "ocr"
+        return "markitdown"
 
 
 @lru_cache

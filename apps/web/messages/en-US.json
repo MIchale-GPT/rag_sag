@@ -476,7 +476,19 @@
     "testing": "Testing…",
     "testGeneration": "Test generation model",
     "saving": "Saving…",
-    "save": "Save and apply"
+    "save": "Save and apply",
+    "presetTitle": "Quick switch",
+    "presetDescription": "Switch the generation model with one click (takes effect immediately, no restart): local Qwen or commercial DeepSeek.",
+    "presetQwenName": "Local Qwen3.6-27B",
+    "presetQwenDesc": "qwen3.6-27b · via local proxy 127.0.0.1:43023, data stays on-premise",
+    "presetDeepseekName": "DeepSeek-V4 (commercial)",
+    "presetDeepseekDesc": "deepseek-v4-flash · official API, fast with strong instruction following",
+    "presetActive": "In use",
+    "presetLocal": "Local",
+    "presetCommercial": "Commercial",
+    "presetSwitched": "Generation model switched: {model}",
+    "presetSwitchFailed": "Failed to switch model",
+    "presetUnknown": "Unknown model"
   },
   "AgentSettings": {
     "saved": "Assistant settings saved",
@@ -889,7 +901,10 @@
       "loadFailed": "Failed to load parsed content",
       "truncated": "This content is long. The preview shows only the first 500,000 characters."
     },
-    "tabs": { "parsed": "Parsed content", "original": "Original file" },
+    "tabs": {
+      "parsed": "Parsed content",
+      "original": "Original file"
+    },
     "document": {
       "loadFailed": "Failed to load document",
       "tokens": "{count} tokens",
@@ -1045,7 +1060,10 @@
     "sourceStats": "{events, plural, one {# event} other {# events}} · {entities, plural, one {# entity} other {# entities}}",
     "sourceStatsBuilding": "{events, plural, one {# event} other {# events}} · building entity statistics",
     "exploreNode": "Explore {kind}: {label}",
-    "kinds": { "event": "event", "entity": "entity" },
+    "kinds": {
+      "event": "event",
+      "entity": "entity"
+    },
     "relatedEvents": "{count, plural, one {# related event} other {# related events}} · {category}",
     "continueExploring": "Continue exploring {progress}/{total}",
     "explorationProgress": "Explored {progress}/{total}",
@@ -1133,7 +1151,10 @@
       "overviewBuilding": "{sources, plural, one {# source} other {# sources}} · {events} events · building entity statistics",
       "visibleContours": " · showing {count, plural, one {# high-density contour} other {# high-density contours}}"
     },
-    "legend": { "entities": "Topic entities", "events": "Related events" },
+    "legend": {
+      "entities": "Topic entities",
+      "events": "Related events"
+    },
     "searchLocked": {
       "label": "Explicit exploration",
       "description": "In search results, the wheel only zooms. Lock a node, then choose Explore more in the details panel."
@@ -1151,7 +1172,7 @@
       "completedTimePosition": "{time} · Exploration complete",
       "partialTime": "{time} (some times are not specified)",
       "unknownTime": "Time not specified",
-      "countRange": "Items {from}\u2013{to} of {total}",
+      "countRange": "Items {from}–{to} of {total}",
       "countPosition": "Item {position} of {total}",
       "explorationComplete": "Exploration complete",
       "home": "Go back",

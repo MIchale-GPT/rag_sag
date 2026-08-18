@@ -14,8 +14,14 @@ import {
 
 export type { DiagEntry, DiagEnvironment, DiagEventType, DiagExport, DiagLogFile };
 
+/**
+ * getServerSnapshot 必须返回缓存引用，否则 React 会判定快照不稳定，
+ * 触发 "should be cached to avoid an infinite loop" 警告并可能死循环。
+ */
+const EMPTY_SNAPSHOT: DiagEntry[] = [];
+
 function emptySnapshot(): DiagEntry[] {
-  return [];
+  return EMPTY_SNAPSHOT;
 }
 
 /**

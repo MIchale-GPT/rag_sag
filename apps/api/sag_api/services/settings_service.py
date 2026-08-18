@@ -46,6 +46,9 @@ _FIELDS = frozenset(
         "mineru_base_url",
         "mineru_api_key",
         "mineru_version",
+        "ocr_base_url",
+        "ocr_api_key",
+        "ocr_model",
         "document_extract_concurrency",
         "document_chunk_max_tokens",
         "document_chunk_mode",
@@ -54,8 +57,8 @@ _FIELDS = frozenset(
         "sag_language",
     }
 )
-_SECRET_FIELDS = frozenset({"llm_api_key", "embedding_api_key", "mineru_api_key"})
-_NULLABLE_FIELDS = frozenset({"llm_base_url", "embedding_base_url", "embedding_dimensions", "mineru_base_url"})
+_SECRET_FIELDS = frozenset({"llm_api_key", "embedding_api_key", "mineru_api_key", "ocr_api_key"})
+_NULLABLE_FIELDS = frozenset({"llm_base_url", "embedding_base_url", "embedding_dimensions", "mineru_base_url", "ocr_base_url"})
 _LOCKABLE_LLM_FIELDS = frozenset(
     {
         "llm_provider",
@@ -88,6 +91,8 @@ QUICK_SETUP_302 = {
     "document_parser": "auto",
     "mineru_base_url": "https://api.302ai.cn",
     "mineru_version": "2.5",
+    "ocr_base_url": "http://127.0.0.1:43124/v1",
+    "ocr_model": "qwen3.5-4b",
     "document_extract_concurrency": 30,
     "document_chunk_max_tokens": 1_000,
     "document_chunk_mode": "standard",
@@ -109,7 +114,7 @@ async def _load_row(session: AsyncSession, key: str = _KEY) -> Setting | None:
 def _normalize_overrides(overrides: dict) -> dict:
     """清理持久化配置，确保已下线或非法策略不会进入运行时。"""
     normalized = dict(overrides)
-    for field in ("llm_base_url", "embedding_base_url", "mineru_base_url"):
+    for field in ("llm_base_url", "embedding_base_url", "mineru_base_url", "ocr_base_url"):
         value = normalized.get(field)
         if isinstance(value, str):
             normalized[field] = _LEGACY_302_BASE_URLS.get(value.rstrip("/"), value)
@@ -202,6 +207,9 @@ def effective_model_config() -> dict:
         "mineru_base_url": _settings.mineru_base_url,
         "mineru_version": _settings.mineru_version,
         "mineru_api_key_set": bool(_settings.mineru_api_key),
+        "ocr_base_url": _settings.ocr_base_url,
+        "ocr_model": _settings.ocr_model,
+        "ocr_api_key_set": bool(_settings.ocr_api_key),
         "document_extract_concurrency": _settings.document_extract_concurrency,
         "document_chunk_max_tokens": _settings.document_chunk_max_tokens,
         "document_chunk_mode": _settings.document_chunk_mode,

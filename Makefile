@@ -59,3 +59,18 @@ compose-up-postgres: ## 使用 Postgres + pgvector 覆盖启动（需先配置 .
 
 compose-down-postgres: ## 停止 Postgres 覆盖部署
 	docker compose -f compose.yaml -f compose.postgres.yaml down
+
+local-start: ## 本地一键启动（embedding + api + web，conda 环境）
+	bash scripts/local-dev.sh start
+
+local-stop: ## 停止本地服务
+	bash scripts/local-dev.sh stop
+
+local-restart: ## 重启本地服务
+	bash scripts/local-dev.sh restart
+
+local-status: ## 查看本地服务状态
+	bash scripts/local-dev.sh status
+
+local-logs: ## 查看本地服务日志
+	bash scripts/local-dev.sh logs

@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { useApp } from "@/components/features/app-shell";
 import { SettingsRow, SettingsSection } from "@/components/features/settings-section";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -31,6 +32,11 @@ import type {
   ModelProviderSpec,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import {
+  MODEL_PRESETS,
+  activePresetId,
+  type ModelPreset,
+} from "@/lib/model-presets";
 
 function is302Api(url: string | null) {
   try {
@@ -152,11 +158,11 @@ export function ModelConfigForm() {
     return patch;
   }
 
-  async function save() {
+  async function save(overrides?: ModelConfigPatch) {
     setSaving(true);
     setTestResult(null);
     try {
-      const patch = currentPatch();
+      const patch = { ...currentPatch(), ...overrides };
       const { config } = await api.saveModelConfig(patch);
       hydrate(config);
       await refreshCapabilities();
@@ -296,6 +302,16 @@ export function ModelConfigForm() {
   const providerSpec = providers.find((provider) => provider.id === llmProvider)!;
   const llmLocked = isLlmConfigLocked(cfg);
 
+  const activePresetIdValue = activePresetId(cfg);
+
+  async function applyPreset(preset: ModelPreset) {
+    setTestResult(null);
+    await save({
+      ...preset.patch,
+      llm_api_key: preset.patch.llm_api_key,
+    });
+  }
+
   const keyPlaceholder = (isSet: boolean) => (isSet ? t("keyConfigured") : "sk-…");
   const generationKeyPlaceholder =
     cfg.llm_api_key_set && cfg.llm_provider === llmProvider
@@ -312,6 +328,41 @@ export function ModelConfigForm() {
           <AlertTitle>{t("deploymentLockTitle")}</AlertTitle>
           <AlertDescription>{t("deploymentLockDescription")}</AlertDescription>
         </Alert>
+      )}
+      {!llmLocked && (
+        <SettingsSection title={t("presetTitle")} description={t("presetDescription")}>
+          <div className="grid gap-3 p-4 sm:grid-cols-2 sm:p-5">
+            {MODEL_PRESETS.map((preset) => {
+              const active = activePresetIdValue === preset.id;
+              return (
+                <Button
+                  key={preset.id}
+                  type="button"
+                  variant={active ? "default" : "outline"}
+                  className="h-auto flex-col items-start gap-1.5 px-4 py-3 text-left"
+                  disabled={saving || testing}
+                  onClick={() => void applyPreset(preset)}
+                >
+                  <span className="flex w-full items-center justify-between gap-2">
+                    <span className="text-sm font-medium">{t(preset.labelKey)}</span>
+                    {active ? (
+                      <Badge variant="secondary">{t("presetActive")}</Badge>
+                    ) : (
+                      <Badge variant={preset.badge === "commercial" ? "default" : "outline"}>
+                        {t(
+                          preset.badge === "commercial" ? "presetCommercial" : "presetLocal",
+                        )}
+                      </Badge>
+                    )}
+                  </span>
+                  <span className="text-xs font-normal leading-relaxed text-muted-foreground">
+                    {t(preset.descriptionKey)}
+                  </span>
+                </Button>
+              );
+            })}
+          </div>
+        </SettingsSection>
       )}
       <SettingsSection title={t("generationTitle")} description={t("generationDescription")}>
         <SettingsRow title={t("connectionTitle")} description={t("connectionDescription")}>
@@ -641,7 +692,7 @@ export function ModelConfigForm() {
             {testing ? <Spinner /> : <Plug />}
             {testing ? t("testing") : t("testGeneration")}
           </Button>
-          <Button type="button" onClick={save} disabled={saving || testing}>
+          <Button type="button" onClick={() => void save()} disabled={saving || testing}>
             {saving ? <Spinner /> : <Save />}
             {saving ? t("saving") : t("save")}
           </Button>

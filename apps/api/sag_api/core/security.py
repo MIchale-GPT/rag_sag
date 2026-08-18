@@ -34,8 +34,9 @@ def create_access_token(subject: str, extra: dict[str, Any] | None = None) -> st
     payload: dict[str, Any] = {
         "sub": subject,
         "iat": now,
-        "exp": now + timedelta(minutes=settings.access_token_expire_minutes),
     }
+    if settings.access_token_expire_minutes > 0:
+        payload["exp"] = now + timedelta(minutes=settings.access_token_expire_minutes)
     if extra:
         payload.update(extra)
     return jwt.encode(payload, settings.secret_key, algorithm=_ALGO)

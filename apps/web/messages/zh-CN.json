@@ -476,7 +476,19 @@
     "testing": "测试中…",
     "testGeneration": "测试生成模型",
     "saving": "保存中…",
-    "save": "保存并生效"
+    "save": "保存并生效",
+    "presetTitle": "快捷切换",
+    "presetDescription": "一键切换生成模型，立即生效（无需重启）：本地 Qwen 或商用 DeepSeek。",
+    "presetQwenName": "本地 Qwen3.6-27B",
+    "presetQwenDesc": "qwen3.6-27b · 经本机代理 127.0.0.1:43023，数据不出内网",
+    "presetDeepseekName": "商用 DeepSeek-V4",
+    "presetDeepseekDesc": "deepseek-v4-flash · 官方 API，速度快、指令遵循好",
+    "presetActive": "使用中",
+    "presetLocal": "本地",
+    "presetCommercial": "商用",
+    "presetSwitched": "已切换生成模型：{model}",
+    "presetSwitchFailed": "模型切换失败",
+    "presetUnknown": "未识别模型"
   },
   "AgentSettings": {
     "saved": "助手设定已保存",
@@ -889,7 +901,10 @@
       "loadFailed": "解析内容加载失败",
       "truncated": "内容较长，预览仅展示前 50 万字符。"
     },
-    "tabs": { "parsed": "解析内容", "original": "原始文件" },
+    "tabs": {
+      "parsed": "解析内容",
+      "original": "原始文件"
+    },
     "document": {
       "loadFailed": "文档加载失败",
       "tokens": "{count} tokens",
@@ -1045,7 +1060,10 @@
     "sourceStats": "{events, number} 事件 · {entities, number} 实体",
     "sourceStatsBuilding": "{events, number} 事件 · 实体统计中",
     "exploreNode": "探索{kind} {label}",
-    "kinds": { "event": "事件", "entity": "实体" },
+    "kinds": {
+      "event": "事件",
+      "entity": "实体"
+    },
     "relatedEvents": "{count, number} 个关联事件 · {category}",
     "continueExploring": "继续探索 {progress}/{total}",
     "explorationProgress": "已探索 {progress}/{total}",
@@ -1133,7 +1151,10 @@
       "overviewBuilding": "{sources, number} 信息源 · {events} 事件 · 实体统计构建中",
       "visibleContours": " · 当前显示 {count, number} 个高密度轮廓"
     },
-    "legend": { "entities": "主题实体", "events": "关联事件" },
+    "legend": {
+      "entities": "主题实体",
+      "events": "关联事件"
+    },
     "searchLocked": {
       "label": "显式探索",
       "description": "搜索结果中滚轮仅用于缩放；锁定节点后，可在详情中选择“探索更多”"

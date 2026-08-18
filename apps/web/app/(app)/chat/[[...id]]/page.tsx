@@ -11,6 +11,7 @@ import {
   useConversationSession,
 } from "@/components/features/chat/conversation-provider";
 import { ConversationPanel } from "@/components/features/chat/conversation-panel";
+import { ModelPresetMenu } from "@/components/features/model-preset-menu";
 import { PetHeadAvatar } from "@/components/features/pet-head-avatar";
 
 /** 对话主入口；会话数据与迷你问答共享，仅保留完整工作台外壳。 */
@@ -78,22 +79,27 @@ export default function ChatPage() {
   if (!agent || !sessionId || !session) return null;
 
   return (
-    <div className="h-full min-h-0">
-      <ConversationPanel
-        key={sessionId}
-        sessionId={sessionId}
-        active={appMode === "normal"}
-        avatarNode={avatarNode}
-        heroNode={heroNode}
-        emptyTitle={agent.name}
-        suggestions={[
-          t("suggestionSummary"),
-          t("suggestionConclusions"),
-          t("suggestionTimeline"),
-        ]}
-        emptyHint={agent.persona?.greeting || t("emptyHint")}
-        placeholder={t("placeholder", { name: agent.name })}
-      />
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center justify-end px-4 pt-3">
+        <ModelPresetMenu />
+      </div>
+      <div className="min-h-0 flex-1">
+        <ConversationPanel
+          key={sessionId}
+          sessionId={sessionId}
+          active={appMode === "normal"}
+          avatarNode={avatarNode}
+          heroNode={heroNode}
+          emptyTitle={agent.name}
+          suggestions={[
+            t("suggestionSummary"),
+            t("suggestionConclusions"),
+            t("suggestionTimeline"),
+          ]}
+          emptyHint={agent.persona?.greeting || t("emptyHint")}
+          placeholder={t("placeholder", { name: agent.name })}
+        />
+      </div>
     </div>
   );
 }
